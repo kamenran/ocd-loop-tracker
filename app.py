@@ -49,6 +49,7 @@ def fPostUser():
 @app.route('/events', methods=['POST'])
 def create_event():
     data = request.get_json()
+    print("Raw incoming data:", data)
 
     user_id = data.get('user_id')
     timestamp = data.get('timestamp')
@@ -57,7 +58,10 @@ def create_event():
     emotion = data.get('emotion')
     notes = data.get('notes', '')
 
-    if not user_id or not timestamp or not trigger or not compulsion or not emotion:
+    print(f"Parsed: {user_id=}, {timestamp=}, {trigger=}, {compulsion=}, {emotion=}, {notes=}")
+
+    if not user_id or not timestamp or not trigger:
+        print("Missing required field")
         return jsonify({'error': 'Missing required fields'}), 400
 
     try:
@@ -74,10 +78,13 @@ def create_event():
         cur.close()
         conn.close()
 
+        print("Insert successful:", new_id)
         return jsonify({'id': str(new_id)}), 201
 
     except Exception as e:
+        print("Error inserting:", e)
         return jsonify({'error': str(e)}), 500
+
 
 # --- Route to get analytics data ---
 @app.route('/analytics', methods=['GET'])
