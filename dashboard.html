@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OCD Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 30px;
+      background-color: #f8f9fa;
+    }
+
+    h1, h2 {
+      margin-top: 40px;
+    }
+
+    form {
+      background: #ffffff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.05);
+      margin-bottom: 50px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 10px;
+    }
+
+    input, textarea {
+      width: 100%;
+      padding: 8px;
+      margin-top: 4px;
+      margin-bottom: 15px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    button {
+      padding: 10px 16px;
+      font-size: 16px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+
+    canvas {
+      margin-top: 30px;
+      margin-bottom: 50px;
+    }
+
+    pre {
+      background: #f1f1f1;
+      padding: 10px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Analytics Dashboard</h1>
+
+  <!-- Add Event Form -->
+  <h2>Add New OCD Event</h2>
+  <form id="eventForm">
+    <label>User ID:
+      <input type="text" id="user_id" required>
+    </label>
+
+    <label>Timestamp:
+      <input type="datetime-local" id="timestamp" required>
+    </label>
+
+    <label>Trigger:
+      <input type="text" id="trigger" required>
+    </label>
+
+    <label>Compulsion:
+      <input type="text" id="compulsion" required>
+    </label>
+
+    <label>Emotion:
+      <input type="text" id="emotion" required>
+    </label>
+
+    <label>Notes:
+      <textarea id="notes"></textarea>
+    </label>
+
+    <button type="submit">Submit Event</button>
+  </form>
+
+  <!-- Chart canvases -->
+  <canvas id="triggerChart" width="600" height="300"></canvas>
+  <canvas id="dailyChart" width="600" height="300"></canvas>
+
+  <!-- Show raw JSON for debugging -->
+  <pre id="data-output">Loading...</pre>
+
+  <script>
+    // Load analytics data and draw charts
+    fetch('http://127.0.0.1:5000/analytics')
+      .then(response => response.json())
+      .then(data => {
+        document.getElementById('data-output').textContent =
+          JSON.stringify(data, null, 2);
+
+        const labels = Object.keys(data.topTriggers);
+        const values = Object.values(data.topTriggers);
+
+        const ctx = document.getElementById('triggerChart').getContext('2d');
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Trigger Frequency',
+              data: values,
+              backgroundColor: 'rgba(75, 192, 192, 0.7)'
+            }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true }
+            }
+          }
+        });
+
+        const dates = data.dailyCounts.map(entry => entry.date);
+        const counts = data.dailyCounts.map(entry => entry.count);
+
+        const ctx2 = document.getElementById('dailyChart').getContext('2d');
+        new Chart(ctx2, {
+          type: 'line',
+          data: {
+            labels: dates,
+            datasets: [{
+              label: 'Entries per Day',
+              data: counts,
+              borderColor: 'rgba(54, 162, 235, 1)',
+              fill: false
+            }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true }
+            }
+          }
+        });
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById('data-output').textContent = 'Error loading data';
+      });
+
+    // Handle event form submission
+    document.getElementById('eventForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+
+      const payload = {
+        user_id: document.getElementById('user_id').value,
+        timestamp: document.getElementById('timestamp').value,
+        trigger: document.getElementById('trigger').value,
+        compulsion: document.getElementById('compulsion').value,
+        emotion: document.getElementById('emotion').value,
+        notes: document.getElementById('notes').value
+      };
+
+      fetch('http://127.0.0.1:5000/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(res => res.json())
+        .then(response => {
+          alert('Event added: ' + response.id);
+          location.reload();
+        })
+        .catch(err => {
+          console.error(err);
+          alert('Error adding event');
+        });
+    });
+  </script>
+</body>
+</html>
