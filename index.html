@@ -1,39 +1,25 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>OCD Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 30px;
-    }
-
-    h1 {
-      margin-bottom: 20px;
-    }
-
-    canvas {
-      margin-top: 30px;
-      margin-bottom: 50px;
-    }
-
-    pre {
-      background: #f4f4f4;
-      padding: 15px;
-      border-radius: 6px;
-    }
-  </style>
-</head>
 <body>
   <h1>Analytics Dashboard</h1>
-  <h2> Sign Up </h2>
+
+  <!-- SIGN UP -->
+  <h2>Sign Up</h2>
   <form id="signupForm">
-	<label> Email: <input type="text" id="signupEmail" required></label><br><br>
-	<label>Password: <input type="password" id="signupPassword" required></label><br><br>
-	<button type="submit">Create Account</button>
-	</form>
-	<p id="signupMsg"></p>
+    <label>Email: <input type="text" id="signupEmail" required></label><br><br>
+    <label>Password: <input type="password" id="signupPassword" required></label><br><br>
+    <button type="submit">Create Account</button>
+  </form>
+  <p id="signupMsg"></p>
+
+  <!-- 🔹 NEW LOGIN FORM -->
+  <h2>Log In</h2>
+  <form id="loginForm">
+    <label>Email: <input type="text" id="loginEmail" required></label><br><br>
+    <label>Password: <input type="password" id="loginPassword" required></label><br><br>
+    <button type="submit">Log In</button>
+  </form>
+  <p id="loginMsg"></p>
+  <!-- 🔹 END LOGIN FORM -->
+
   <h2>Log a New Event</h2>
   <form id="eventForm">
     <label>Trigger: <input type="text" id="trigger" required></label><br><br>
@@ -50,149 +36,167 @@
   <pre id="data-output">Loading...</pre>
 
   <script>
-   let triggerChart = null;
-  let dailyChart = null;
+    let triggerChart = null;
+    let dailyChart = null;
 
-  function loadAnalytics() {
-    fetch('http://127.0.0.1:5000/analytics')
-      .then(response => response.json())
-      .then(data => renderDashboard(data))
-      .catch(err => {
+    function loadAnalytics() {
+      fetch('http://127.0.0.1:5000/analytics')
+        .then(response => response.json())
+        .then(data => renderDashboard(data))
+        .catch(err => {
+          console.error(err);
+          document.getElementById('data-output').textContent = 'Error loading data';
+        });
+    }
+
+    function renderDashboard(data) {
+      document.getElementById('data-output').textContent =
+        JSON.stringify(data, null, 2);
+
+      const dates = data.dailyCounts.map(entry => entry.date);
+      const counts = data.dailyCounts.map(entry => entry.count);
+      const labels = Object.keys(data.topTriggers);
+      const values = Object.values(data.topTriggers);
+
+      if (triggerChart) triggerChart.destroy();
+      if (dailyChart) dailyChart.destroy();
+
+      const ctx2 = document.getElementById('dailyChart').getContext('2d');
+      dailyChart = new Chart(ctx2, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Entries per Day',
+            data: counts,
+            borderColor: 'rgba(54, 162, 235, 1)',
+            fill: false
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+
+      const ctx = document.getElementById('triggerChart').getContext('2d');
+      triggerChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Trigger Frequency',
+            data: values,
+            backgroundColor: 'rgba(75, 192, 192, 0.7)'
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+    }
+
+    // --- SIGNUP FORM ---
+    document.getElementById('signupForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const email = document.getElementById('signupEmail').value;
+      const password = document.getElementById('signupPassword').value;
+
+      const payload = { email: email, password: password }; // ✅ fixed key
+
+      try {
+        const res = await fetch('http://127.0.0.1:5000/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          localStorage.setItem('user_id', data.id);
+          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
+        } else {
+          const err = await res.json();
+          document.getElementById('signupMsg').textContent = "Signup failed: " + (err.error || "Unknown error");
+        }
+      } catch (err) {
         console.error(err);
-        document.getElementById('data-output').textContent = 'Error loading data';
-      });
-  }
-
-  function renderDashboard(data) {
-    document.getElementById('data-output').textContent =
-      JSON.stringify(data, null, 2);
-
-    const dates = data.dailyCounts.map(entry => entry.date);
-    const counts = data.dailyCounts.map(entry => entry.count);
-    const labels = Object.keys(data.topTriggers);
-    const values = Object.values(data.topTriggers);
-
-    if (triggerChart) triggerChart.destroy();
-    if (dailyChart) dailyChart.destroy();
-
-    const ctx2 = document.getElementById('dailyChart').getContext('2d');
-    dailyChart = new Chart(ctx2, {
-      type: 'line',
-      data: {
-        labels: dates,
-        datasets: [{
-          label: 'Entries per Day',
-          data: counts,
-          borderColor: 'rgba(54, 162, 235, 1)',
-          fill: false
-        }]
-      },
-      options: {
-        responsive: true,
-        scales: {
-          y: { beginAtZero: true }
-        }
+        document.getElementById('signupMsg').textContent = "Network error.";
       }
     });
 
-    const ctx = document.getElementById('triggerChart').getContext('2d');
-    triggerChart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'Trigger Frequency',
-          data: values,
-          backgroundColor: 'rgba(75, 192, 192, 0.7)'
-        }]
-      },
-      options: {
-        responsive: true,
-        scales: {
-          y: { beginAtZero: true }
-        }
-      }
-    });
-  }
+    // --- 🔹 LOGIN FORM ---
+    document.getElementById('loginForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const email = document.getElementById('loginEmail').value;
+      const password = document.getElementById('loginPassword').value;
 
-  // --- SIGNUP FORM ---
-  document.getElementById('signupForm').addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const email = document.getElementById('signupEmail').value;
-    const password = document.getElementById('signupPassword').value;
+      const payload = { email: email, password: password };
 
-    const payload = {
-      email: email,
-      passwordHash: password
-    };
+      try {
+        const res = await fetch('http://127.0.0.1:5000/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
 
-    try {
-      const res = await fetch('http://127.0.0.1:5000/users', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
         const data = await res.json();
-        localStorage.setItem('user_id', data.id);
-        document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-      } else {
-        document.getElementById('signupMsg').textContent = "Signup failed.";
+        if (res.ok) {
+          localStorage.setItem('user_id', data.id);
+          document.getElementById('loginMsg').textContent = "Login successful!";
+        } else {
+          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || "Unknown error");
+        }
+      } catch (err) {
+        console.error(err);
+        document.getElementById('loginMsg').textContent = "Network error.";
       }
-    } catch (err) {
-      console.error(err);
-      document.getElementById('signupMsg').textContent = "Network error.";
-    }
-  });
+    });
+    // --- END LOGIN FORM ---
 
-  // --- EVENT LOGGING FORM ---
-  document.getElementById('eventForm').addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const userId = localStorage.getItem('user_id');
-    if (!userId) {
-      document.getElementById('submitMsg').textContent = "No user ID found. Please sign up first.";
-      return;
-    }
-
-    const trigger = document.getElementById('trigger').value;
-    const compulsion = document.getElementById('compulsion').value;
-    const emotion = document.getElementById('emotion').value;
-    const notes = document.getElementById('notes').value;
-
-    const payload = {
-      user_id: userId,
-      timestamp: new Date().toISOString(),
-      trigger: trigger,
-      compulsion: compulsion,
-      emotion: emotion,
-      notes: notes
-    };
-
-    try {
-      const res = await fetch('http://127.0.0.1:5000/events', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        document.getElementById('submitMsg').textContent = "Event logged.";
-        loadAnalytics();
-      } else {
-        document.getElementById('submitMsg').textContent = "Error logging event.";
+    // --- EVENT LOGGING FORM ---
+    document.getElementById('eventForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const userId = localStorage.getItem('user_id');
+      if (!userId) {
+        document.getElementById('submitMsg').textContent = "No user ID found. Please sign up or log in first.";
+        return;
       }
-    } catch (err) {
-      console.error(err);
-      document.getElementById('submitMsg').textContent = "Network error.";
-    }
-  });
 
-  loadAnalytics();
+      const trigger = document.getElementById('trigger').value;
+      const compulsion = document.getElementById('compulsion').value;
+      const emotion = document.getElementById('emotion').value;
+      const notes = document.getElementById('notes').value;
+
+      const payload = {
+        user_id: userId,
+        timestamp: new Date().toISOString(),
+        trigger: trigger,
+        compulsion: compulsion,
+        emotion: emotion,
+        notes: notes
+      };
+
+      try {
+        const res = await fetch('http://127.0.0.1:5000/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          document.getElementById('submitMsg').textContent = "Event logged.";
+          loadAnalytics();
+        } else {
+          document.getElementById('submitMsg').textContent = "Error logging event.";
+        }
+      } catch (err) {
+        console.error(err);
+        document.getElementById('submitMsg').textContent = "Network error.";
+      }
+    });
+
+    loadAnalytics();
   </script>
 </body>
-</html>

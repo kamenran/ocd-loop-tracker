@@ -1,18 +1,20 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_bcrypt import Bcrypt
 import psycopg2
 import uuid
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)  # 🔓 Allows frontend (dashboard.html) to access this backend
+bcrypt = Bcrypt(app)
+CORS(app)  #Allows frontend (dashboard.html) to access this backend
 
 # --- Database connection setup ---
 def fGetConnection():
     return psycopg2.connect(
         dbname="ocd_tracker",
         user="postgres",
-        password="Kamboarder1001",
+        password="Kamboarder1001",	
         host="localhost",
         port="5432"
     )
@@ -22,10 +24,13 @@ def fGetConnection():
 def fPostUser():
     data = request.json
     sEmail = data.get("email")
-    sPasswordHash = data.get("passwordHash")
+    sPassword = data.get("password")  # now plain text, not pre-hashed
 
-    if not sEmail or not sPasswordHash:
+    if not sEmail or not sPassword:
         return jsonify({"error": "Missing fields"}), 400
+
+    # Hash the password securely
+    sPasswordHash = bcrypt.generate_password_hash(sPassword).decode("utf-8")
 
     sId = str(uuid.uuid4())
     dtCreatedAt = datetime.utcnow()
@@ -43,9 +48,41 @@ def fPostUser():
         return jsonify({"id": sId}), 201
 
     except Exception as e:
+        return jsonify({"error": str(e)}), 500# --- Route to create a new OCD event ---
+# --- Route to log in a user ---
+@app.route("/login", methods=["POST"])
+def fLogin():
+    data = request.json
+    sEmail = data.get("email")
+    sPassword = data.get("password")
+
+    if not sEmail or not sPassword:
+        return jsonify({"error": "Missing fields"}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+
+        # Look up the user by email
+        cur.execute("SELECT id, passwordhash FROM users WHERE email = %s", (sEmail,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+
+        sUserId, sPasswordHash = row
+
+        # Check if the password matches the stored hash
+        if bcrypt.check_password_hash(sPasswordHash, sPassword):
+            return jsonify({"id": sUserId}), 200
+        else:
+            return jsonify({"error": "Invalid password"}), 401
+
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- Route to create a new OCD event ---
 @app.route('/events', methods=['POST'])
 def create_event():
     data = request.get_json()
