@@ -1,293 +1,297 @@
-import os
-import io
-import csv
-import uuid
-import time
-import psycopg2
-import requests
-from datetime import datetime, timezone
-
-from flask import Flask, request, jsonify, send_file, Response
-from flask_cors import CORS
-from flask_bcrypt import Bcrypt
-
-# PDF (ReportLab)
+from flask import send_file
+from io import BytesIO
 from reportlab.lib.pagesizes import LETTER
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-
-APP_VERSION = "2025-09-04"
-HF_DEFAULT_MODEL = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
-HF_TIMEOUT_SEC = 20
-HF_RETRIES = 4
-
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from flask_bcrypt import Bcrypt
+import psycopg2
+import uuid
+from datetime import datetime
+import csv
+import os
+import io
+import time
+import requests
+from flask import Response
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
+CORS(app)  #Allows frontend (dashboard.html) to access this backend
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-HUGGINGFACE_MODEL = os.getenv("HUGGINGFACE_MODEL", HF_DEFAULT_MODEL)
+HUGGINGFACE_MODEL = os.getenv(
+    "HUGGINGFACE_MODEL",
+    "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+)
+_HF_TIMEOUT = 12
+_HF_RETRIES = 3
+# --- Database connection setup ---
 
-# ------------------------------- DB -------------------------------
-def db():
-    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
-    conn.autocommit = True
-    return conn
 
-def init_db():
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS users(
-          id UUID PRIMARY KEY,
-          email TEXT UNIQUE NOT NULL,
-          passwordhash TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL
-        );
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS events(
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-          trigger TEXT NOT NULL,
-          compulsion TEXT,
-          emotion TEXT,
-          notes TEXT,
-          timestamp TIMESTAMPTZ NOT NULL
-        );
-        """)
-
-# Flask 3: run init at import (no before_first_request)
-try:
-    init_db()
-except Exception as e:
-    print(f"[init_db] warning: {e}")
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
-
-def json_error(msg, code=400):
-    return jsonify({"error": msg}), code
-
-def list_routes():
-    out = []
-    for rule in app.url_map.iter_rules():
-        methods = sorted(m for m in rule.methods if m not in ("HEAD", "OPTIONS"))
-        out.append({"rule": str(rule), "methods": methods, "endpoint": rule.endpoint})
-    return out
-
-# ----------------------- Health & Debug -----------------------
-@app.route("/healthz")
-def healthz():
-    return "ok", 200
-
-@app.route("/version")
-def version():
-    return jsonify({
-        "version": APP_VERSION,
-        "mode": "hf-inference",
-        "hf_model": HUGGINGFACE_MODEL
-    })
-
-@app.route("/debug/routes")
-def debug_routes():
-    return jsonify(list_routes())
-
-@app.route("/debug/reportlab")
-def debug_reportlab():
-    try:
-        _ = SimpleDocTemplate(io.BytesIO(), pagesize=LETTER)
-        return jsonify({"reportlab": "ok"})
-    except Exception as e:
-        return json_error(f"reportlab_error: {e}", 500)
-
-@app.route("/debug/hf")
-def debug_hf():
-    probe = hf_sentiment("I feel okay.")
-    return jsonify({
-        "env": {
-            "has_api_key": bool(HUGGINGFACE_API_KEY),
-            "model": HUGGINGFACE_MODEL,
-            "timeout": HF_TIMEOUT_SEC,
-            "retries": HF_RETRIES
-        },
-        "probe": probe
-    })
-
-# ----------------------------- Auth -----------------------------
+def fGetConnection():
+    conn_str = os.getenv("DATABASE_URL")
+    if not conn_str:
+        raise Exception("DATABASE_URL not set")
+    return psycopg2.connect(conn_str)
+# --- Route to create a new user ---
 @app.route("/users", methods=["POST"])
-def create_user():
-    data = request.get_json(force=True, silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-    if not email or not password:
-        return json_error("email and password required")
+def fPostUser():
+    data = request.json
+    sEmail = data.get("email")
+    sPassword = data.get("password")  # now plain text, not pre-hashed
 
-    uid = uuid.uuid4()
-    pwdhash = bcrypt.generate_password_hash(password).decode("utf-8")
+    if not sEmail or not sPassword:
+        return jsonify({"error": "Missing fields"}), 400
+
+    # Hash the password securely
+    sPasswordHash = bcrypt.generate_password_hash(sPassword).decode("utf-8")
+
+    sId = str(uuid.uuid4())
+    dtCreatedAt = datetime.utcnow()
+
     try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO users(id,email,passwordhash,created_at) VALUES(%s,%s,%s,%s)",
-                (str(uid), email, pwdhash, datetime.now(timezone.utc))
-            )
-        return jsonify({"id": str(uid), "email": email, "created_at": now_iso()})
-    except psycopg2.Error:
-        # Unique violation or other pg error -> treat as conflict
-        return json_error("email already exists", 409)
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (id, email, passwordhash, created_at)
+            VALUES (%s, %s, %s, %s)
+        """, (sId, sEmail, sPasswordHash, dtCreatedAt))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"id": sId}), 201
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500# --- Route to create a new OCD event ---
+# --- Route to log in a user ---
 @app.route("/login", methods=["POST"])
-def login():
-    data = request.get_json(force=True, silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-    if not email or not password:
-        return json_error("email and password required")
+def fLogin():
+    data = request.json
+    sEmail = data.get("email")
+    sPassword = data.get("password")
 
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, passwordhash FROM users WHERE email=%s", (email,))
+    if not sEmail or not sPassword:
+        return jsonify({"error": "Missing fields"}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+
+        # Look up the user by email
+        cur.execute("SELECT id, passwordhash FROM users WHERE email = %s", (sEmail,))
         row = cur.fetchone()
+        cur.close()
+        conn.close()
+
         if not row:
-            return json_error("invalid credentials", 401)
-        uid, pwdhash = row
-        if not bcrypt.check_password_hash(pwdhash, password):
-            return json_error("invalid credentials", 401)
-        return jsonify({"id": str(uid), "email": email})
+            return jsonify({"error": "User not found"}), 404
 
-# ---------------------------- Events ----------------------------
-@app.route("/events", methods=["POST"])
-def add_event():
-    data = request.get_json(force=True, silent=True) or {}
+        sUserId, sPasswordHash = row
+
+        # Check if the password matches the stored hash
+        if bcrypt.check_password_hash(sPasswordHash, sPassword):
+            return jsonify({"id": sUserId}), 200
+        else:
+            return jsonify({"error": "Invalid password"}), 401
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/events', methods=['POST'])
+def create_event():
+    data = request.get_json()
+    print("Raw incoming data:", data)
+
+    user_id = data.get('user_id')
+    timestamp = data.get('timestamp')
+    trigger = data.get('trigger')
+    compulsion = data.get('compulsion')
+    emotion = data.get('emotion')
+    notes = data.get('notes', '')
+
+    print(f"Parsed: {user_id=}, {timestamp=}, {trigger=}, {compulsion=}, {emotion=}, {notes=}")
+
+    if not user_id or not timestamp or not trigger:
+        print("Missing required field")
+        return jsonify({'error': 'Missing required fields'}), 400
+
     try:
-        user_id = data["user_id"]
-        trig = (data.get("trigger") or "").strip()
-        comp = (data.get("compulsion") or "").strip() or None
-        emo = (data.get("emotion") or "").strip() or None
-        notes = (data.get("notes") or "").strip() or None
-        ts = data.get("timestamp")
-    except Exception:
-        return json_error("invalid payload")
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO events (id, user_id, trigger, compulsion, emotion, notes, timestamp)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s)
+            RETURNING id;
+        """, (user_id, trigger, compulsion, emotion, notes, timestamp))
 
-    if not user_id or not trig:
-        return json_error("user_id and trigger required")
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print("Insert successful:", new_id)
+        return jsonify({'id': str(new_id)}), 201
+
+    except Exception as e:
+        print("Error inserting:", e)
+        return jsonify({'error': str(e)}), 500
+
+
+# --- Route to get analytics data (per user) ---
+@app.route('/analytics', methods=['GET'])
+def fGetAnalytics():
+    sUserId = request.args.get('user_id')  # ?user_id=<uuid>
+
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
 
     try:
-        event_ts = datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else datetime.now(timezone.utc)
-    except Exception:
-        return json_error("timestamp must be ISO-8601")
+        conn = fGetConnection()
+        cur = conn.cursor()
 
-    with db() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO events(user_id,trigger,compulsion,emotion,notes,timestamp) VALUES(%s,%s,%s,%s,%s,%s) RETURNING id",
-            (user_id, trig, comp, emo, notes, event_ts)
-        )
-        eid = cur.fetchone()[0]
-    return jsonify({"id": str(eid), "ok": True})
+        # Top trigger frequencies for this user
+        cur.execute("""
+            SELECT trigger, COUNT(*) AS count
+            FROM events
+            WHERE user_id = %s
+            GROUP BY trigger
+            ORDER BY count DESC;
+        """, (sUserId,))
+        trigger_rows = cur.fetchall()
+        top_triggers = {row[0]: row[1] for row in trigger_rows}
 
-@app.route("/analytics")
-def analytics():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return json_error("user_id required")
+        # Daily counts for this user
+        cur.execute("""
+            SELECT DATE(timestamp) AS date, COUNT(*) AS count
+            FROM events
+            WHERE user_id = %s
+            GROUP BY DATE(timestamp)
+            ORDER BY date ASC;
+        """, (sUserId,))
+        date_rows = cur.fetchall()
+        daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
 
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT timestamp::date, COUNT(*) FROM events WHERE user_id=%s GROUP BY 1 ORDER BY 1", (user_id,))
-        daily = [{"date": d.isoformat(), "count": c} for d, c in cur.fetchall()]
+        cur.close()
+        conn.close()
 
-        cur.execute("SELECT trigger, COUNT(*) FROM events WHERE user_id=%s GROUP BY 1 ORDER BY 2 DESC LIMIT 10", (user_id,))
-        top = {t: c for t, c in cur.fetchall()}
+        return jsonify({
+            "topTriggers": top_triggers,
+            "dailyCounts": daily_counts
+        }), 200
 
-    return jsonify({"dailyCounts": daily, "topTriggers": top})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+# --- Route to export events as CSV ---
+@app.route('/export/csv', methods=['GET'])
+def fExportCSV():
+    sUserId = request.args.get('user_id')
 
-# ---------------------------- Exports ---------------------------
-@app.route("/export/csv")
-def export_csv():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return json_error("user_id required")
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
 
-    with db() as conn, conn.cursor() as cur:
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
         cur.execute("""
             SELECT id, user_id, trigger, compulsion, emotion, notes, timestamp
-            FROM events WHERE user_id=%s ORDER BY timestamp DESC
-        """, (user_id,))
+            FROM events
+            WHERE user_id = %s
+            ORDER BY timestamp ASC;
+        """, (sUserId,))
         rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        cur.close()
+        conn.close()
 
-    def generate():
+        # Write rows to CSV in memory
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["id","user_id","trigger","compulsion","emotion","notes","timestamp"])
-        yield output.getvalue()
-        output.seek(0); output.truncate(0)
-        for r in rows:
-            writer.writerow([str(r[0]), r[1], r[2], r[3] or "", r[4] or "", r[5] or "", r[6].isoformat()])
-            yield output.getvalue()
-            output.seek(0); output.truncate(0)
+        writer.writerow(colnames)   # header
+        writer.writerows(rows)
 
-    return Response(generate(), mimetype="text/csv",
-                    headers={"Content-Disposition": 'attachment; filename="events.csv"'})
+        response = Response(output.getvalue(), mimetype='text/csv')
+        response.headers.set("Content-Disposition", "attachment", filename="events.csv")
+        return response
 
-@app.route("/export/pdf")
-def export_pdf():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return json_error("user_id required")
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+@app.route('/export/pdf', methods=['GET'])
+def fExportPDF():
+    sUserId = request.args.get('user_id')
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
 
-    with db() as conn, conn.cursor() as cur:
+    # --- fetch rows ---
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
         cur.execute("""
-            SELECT timestamp, trigger, compulsion, emotion, notes
-            FROM events WHERE user_id=%s ORDER BY timestamp DESC LIMIT 150
-        """, (user_id,))
+            SELECT id, user_id, trigger, compulsion, emotion, notes, timestamp
+            FROM events
+            WHERE user_id = %s
+            ORDER BY timestamp ASC;
+        """, (sUserId,))
         rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': f'DB error: {e}'}), 500
 
-        cur.execute("SELECT COUNT(*) FROM events WHERE user_id=%s", (user_id,))
-        total_events = cur.fetchone()[0]
+    # --- build PDF in memory ---
+    try:
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=LETTER, title="OCD Events Export")
 
-        cur.execute("SELECT trigger, COUNT(*) FROM events WHERE user_id=%s GROUP BY 1 ORDER BY 2 DESC LIMIT 5", (user_id,))
-        top = cur.fetchall()
+        # table data
+        data = [colnames]
+        for r in rows:
+            r = list(r)
+            # timestamp → string, defensively
+            try:
+                r[-1] = r[-1].strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                r[-1] = str(r[-1]) if r[-1] is not None else ""
+            # trim very long notes
+            if r[5] and len(str(r[5])) > 200:
+                r[5] = str(r[5])[:200] + "..."
+            data.append(r)
 
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=LETTER)
-    styles = getSampleStyleSheet()
-    story = []
-
-    story.append(Paragraph("OCD Tracker — Report", styles["Title"]))
-    story.append(Paragraph(f"Generated: {now_iso()}", styles["Normal"]))
-    story.append(Paragraph(f"Total Events: {total_events}", styles["Normal"]))
-    story.append(Spacer(1, 8))
-
-    if top:
-        data = [["Top Triggers", "Count"]] + [[t, c] for t, c in top]
-        table = Table(data, hAlign="LEFT")
+        table = Table(data, hAlign='LEFT')
         table.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ('BACKGROUND',      (0,0), (-1,0), colors.HexColor('#1ABC9C')),
+            ('TEXTCOLOR',       (0,0), (-1,0), colors.white),
+            ('FONTNAME',        (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE',        (0,0), (-1,0), 10),
+            ('GRID',            (0,0), (-1,-1), 0.25, colors.grey),
+            ('ROWBACKGROUNDS',  (0,1), (-1,-1), [colors.whitesmoke, colors.HexColor('#F7F9FB')]),
+            ('FONTSIZE',        (0,1), (-1,-1), 9),
+            ('VALIGN',          (0,0), (-1,-1), 'TOP'),
         ]))
-        story.append(table)
-        story.append(Spacer(1, 12))
 
-    data = [["Timestamp", "Trigger", "Compulsion", "Emotion", "Notes"]]
-    for ts, trig, comp, emo, notes in rows:
-        data.append([ts.isoformat(), trig, comp or "", emo or "", (notes or "")[:200]])
+        # optional title
+        styles = getSampleStyleSheet()
+        title = Paragraph(f"<b>OCD Tracker — Events Export</b><br/>User: {sUserId}", styles['Title'])
 
-    table = Table(data, colWidths=[120, 100, 90, 70, 150])
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-        ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-        ("FONTSIZE", (0,0), (-1,-1), 8),
-        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-    ]))
-    story.append(table)
+        doc.build([title, table])
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f"events_{sUserId}.pdf"
+        )
+    except Exception as e:
+        return jsonify({'error': f'PDF error: {e}'}), 500
 
-    doc.build(story)
-    buf.seek(0)
-    return send_file(buf, as_attachment=True, download_name="ocd_report.pdf", mimetype="application/pdf")
-
-# ----------------------- HF Inference API -----------------------
-def hf_sentiment(text: str):
+def _hf_sentiment(text: str):
+    """
+    Calls Hugging Face Inference API for sentiment. Returns dict:
+    { available: bool, label?: str, score?: float, reason?: str }
+    """
     if not HUGGINGFACE_API_KEY:
         return {"available": False, "reason": "missing_api_key"}
 
@@ -295,28 +299,26 @@ def hf_sentiment(text: str):
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
     payload = {"inputs": text}
 
-    for attempt in range(1, HF_RETRIES + 1):
+    for attempt in range(1, _HF_RETRIES + 1):
         try:
-            res = requests.post(url, headers=headers, json=payload, timeout=HF_TIMEOUT_SEC)
-            if res.status_code == 503:
+            r = requests.post(url, headers=headers, json=payload, timeout=_HF_TIMEOUT)
+            if r.status_code == 503:  # cold start
                 time.sleep(min(2 * attempt, 6))
                 continue
-            res.raise_for_status()
-            out = res.json()
-            # [[{label,score},...]] or [{label,score},...]
-            if isinstance(out, list) and out:
-                seq = out[0] if (isinstance(out[0], list) and out[0]) else out
-                if isinstance(seq, list) and seq:
-                    best = max(seq, key=lambda x: x.get("score", 0))
-                    return {
-                        "available": True,
-                        "label": best.get("label"),
-                        "score": best.get("score"),
-                        "model": HUGGINGFACE_MODEL
-                    }
-            return {"available": False, "reason": "unexpected_response", "raw": out}
+            r.raise_for_status()
+            out = r.json()
+            # response can be [[...]] or [...]
+            seq = out[0] if (isinstance(out, list) and out and isinstance(out[0], list)) else out
+            if isinstance(seq, list) and seq:
+                best = max(seq, key=lambda x: x.get("score", 0))
+                return {
+                    "available": True,
+                    "label": best.get("label"),
+                    "score": float(best.get("score", 0.0))
+                }
+            return {"available": False, "reason": "unexpected_response"}
         except requests.RequestException as e:
-            if attempt == HF_RETRIES:
+            if attempt == _HF_RETRIES:
                 return {"available": False, "reason": f"network_error: {e}"}
             time.sleep(min(2 * attempt, 6))
     return {"available": False, "reason": "unknown"}
@@ -327,22 +329,17 @@ def analyze():
     notes = (data.get("notes") or "").strip()
     if not notes:
         return jsonify({"available": False, "reason": "notes required"}), 400
-
-    result = hf_sentiment(notes)
-    if (isinstance(result, dict) and result.get("available")) or ("label" in result):
+    # keep payload small
+    notes = notes[:500]
+    result = _hf_sentiment(notes)
+    # Always return a consistent shape
+    if result.get("available"):
         return jsonify({
             "available": True,
-            "label": result.get("label"),
-            "score": result.get("score"),
-            "model": result.get("model", HUGGINGFACE_MODEL)
-        })
-    return jsonify({"available": False, "reason": result.get("reason", "unknown")})
-
-# ------------------------------ Root ------------------------------
-@app.route("/")
-def root():
-    return jsonify({"ok": True, "message": "OCD Tracker API"}), 200
-
-# ------------------------------ Main ------------------------------
+            "label": result["label"],
+            "score": round(result["score"], 4),
+            "model": HUGGINGFACE_MODEL
+        }), 200
+    return jsonify({"available": False, "reason": result.get("reason", "unknown")}), 200
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+    app.run(debug=True, host="127.0.0.1", port=5000)
