@@ -59,9 +59,11 @@ def init_db():
         );
         """)
 
-@app.before_first_request
-def _startup():
+# Flask 3: run init at import (no before_first_request)
+try:
     init_db()
+except Exception as e:
+    print(f"[init_db] warning: {e}")
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -132,8 +134,9 @@ def create_user():
                 (str(uid), email, pwdhash, datetime.now(timezone.utc))
             )
         return jsonify({"id": str(uid), "email": email, "created_at": now_iso()})
-    except psycopg2.Error as e:
-        return json_error("email already exists" if getattr(e, "pgcode", None) else f"db_error: {e}", 409)
+    except psycopg2.Error:
+        # Unique violation or other pg error -> treat as conflict
+        return json_error("email already exists", 409)
 
 @app.route("/login", methods=["POST"])
 def login():
