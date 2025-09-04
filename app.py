@@ -1,3 +1,9 @@
+from flask import send_file
+from io import BytesIO
+from reportlab.lib.pagesizes import LETTER
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
@@ -203,5 +209,54 @@ def fExportCSV():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+@app.route('/export/pdf', methods=['GET'])
+def fExportPDF():
+    sUserId = request.args.get('user_id')
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, user_id, trigger, compulsion, emotion, notes, timestamp
+            FROM events
+            WHERE user_id = %s
+            ORDER BY timestamp ASC;
+        """, (sUserId,))
+        rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        cur.close()
+        conn.close()
+
+        # Build a simple PDF table in-memory
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=LETTER, title="OCD Events Export")
+        styles = getSampleStyleSheet()
+
+        # Header row + data (format timestamp nicely)
+        data = [colnames]
+        for row in rows:
+            row = list(row)
+            # last col is timestamp
+            if row[-1] is not None:
+                try:
+                    row[-1] = row[-1].strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    row[-1] = str(row[-1])
+            # optionally truncate long notes to keep table readable
+            if row[5] and len(str(row[5])) > 200:
+                row[5] = str(row[5])[:200] + "..."
+            data.append(row)
+
+        table = Table(data, hAlign='LEFT')
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1ABC9C')),
+            ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
+            ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0,0), (-1,0), 10),
+            ('GRID',       (0,0), (-1,-1), 0.25, colors.grey),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [c]()
+
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)
