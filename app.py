@@ -4,7 +4,9 @@ from flask_bcrypt import Bcrypt
 import psycopg2
 import uuid
 from datetime import datetime
-
+import csv
+import io
+from flask import Response
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
 CORS(app)  #Allows frontend (dashboard.html) to access this backend
@@ -123,30 +125,37 @@ def create_event():
         return jsonify({'error': str(e)}), 500
 
 
-# --- Route to get analytics data ---
+# --- Route to get analytics data (per user) ---
 @app.route('/analytics', methods=['GET'])
 def fGetAnalytics():
+    sUserId = request.args.get('user_id')  # ?user_id=<uuid>
+
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
+
     try:
         conn = fGetConnection()
         cur = conn.cursor()
 
-        # Get top trigger frequencies
+        # Top trigger frequencies for this user
         cur.execute("""
-            SELECT trigger, COUNT(*) as count
+            SELECT trigger, COUNT(*) AS count
             FROM events
+            WHERE user_id = %s
             GROUP BY trigger
             ORDER BY count DESC;
-        """)
+        """, (sUserId,))
         trigger_rows = cur.fetchall()
         top_triggers = {row[0]: row[1] for row in trigger_rows}
 
-        # Get daily event counts
+        # Daily counts for this user
         cur.execute("""
-            SELECT DATE(timestamp) as date, COUNT(*) as count
+            SELECT DATE(timestamp) AS date, COUNT(*) AS count
             FROM events
+            WHERE user_id = %s
             GROUP BY DATE(timestamp)
             ORDER BY date ASC;
-        """)
+        """, (sUserId,))
         date_rows = cur.fetchall()
         daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
 
@@ -160,7 +169,39 @@ def fGetAnalytics():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+# --- Route to export events as CSV ---
+@app.route('/export/csv', methods=['GET'])
+def fExportCSV():
+    sUserId = request.args.get('user_id')
 
-# --- Start the Flask app ---
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, user_id, trigger, compulsion, emotion, notes, timestamp
+            FROM events
+            WHERE user_id = %s
+            ORDER BY timestamp ASC;
+        """, (sUserId,))
+        rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        cur.close()
+        conn.close()
+
+        # Write rows to CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(colnames)   # header
+        writer.writerows(rows)
+
+        response = Response(output.getvalue(), mimetype='text/csv')
+        response.headers.set("Content-Disposition", "attachment", filename="events.csv")
+        return response
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)

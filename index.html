@@ -1,47 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OCD Tracker Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background: #f9fafc;
+      color: #2C3E50;
+      line-height: 1.5;
+      margin: 0;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    h1 {
+      color: #1ABC9C;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      color: #34495E;
+      margin-top: 0;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+
+    label {
+      display: block;
+      margin: 10px 0 5px;
+      font-weight: 500;
+    }
+
+    input, textarea, button {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-bottom: 12px;
+      box-sizing: border-box;
+    }
+
+    textarea {
+      resize: vertical;
+    }
+
+    button {
+      background: #1ABC9C;
+      color: white;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #16a085;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    p.msg {
+      font-size: 14px;
+      margin-top: -8px;
+      margin-bottom: 10px;
+    }
+    p.error { color: #e74c3c; }
+    p.success { color: #27ae60; }
+
+    footer {
+      text-align: center;
+      font-size: 13px;
+      color: #7f8c8d;
+      margin-top: 30px;
+    }
+
+    @media (max-width: 600px) {
+      body { padding: 15px; }
+      .actions { flex-direction: column; }
+    }
+  </style>
+</head>
 <body>
-  <h1>Analytics Dashboard</h1>
+  <div class="container">
+    <header>
+      <h1>OCD Tracker</h1>
+      <p>Your personal dashboard for tracking and reflection</p>
+    </header>
 
-  <!-- SIGN UP -->
-  <h2>Sign Up</h2>
-  <form id="signupForm">
-    <label>Email: <input type="text" id="signupEmail" required></label><br><br>
-    <label>Password: <input type="password" id="signupPassword" required></label><br><br>
-    <button type="submit">Create Account</button>
-  </form>
-  <p id="signupMsg"></p>
+    <!-- SIGN UP -->
+    <div class="card">
+      <h2>Sign Up</h2>
+      <form id="signupForm">
+        <label>Email:</label>
+        <input type="text" id="signupEmail" required>
+        <label>Password:</label>
+        <input type="password" id="signupPassword" required>
+        <button type="submit">Create Account</button>
+      </form>
+      <p id="signupMsg" class="msg"></p>
+    </div>
 
-  <!-- 🔹 NEW LOGIN FORM -->
-  <h2>Log In</h2>
-  <form id="loginForm">
-    <label>Email: <input type="text" id="loginEmail" required></label><br><br>
-    <label>Password: <input type="password" id="loginPassword" required></label><br><br>
-    <button type="submit">Log In</button>
-  </form>
-  <p id="loginMsg"></p>
-  <!-- 🔹 END LOGIN FORM -->
+    <!-- LOGIN -->
+    <div class="card">
+      <h2>Log In</h2>
+      <form id="loginForm">
+        <label>Email:</label>
+        <input type="text" id="loginEmail" required>
+        <label>Password:</label>
+        <input type="password" id="loginPassword" required>
+        <button type="submit">Log In</button>
+      </form>
+      <p id="loginMsg" class="msg"></p>
+      <div class="actions">
+        <button id="logoutBtn" style="display:none;">Log out</button>
+        <button id="downloadCsvBtn" style="display:none;">Download CSV</button>
+        <button id="downloadPdfBtn" style="display:none;">Download PDF</button>
+      </div>
+    </div>
 
-  <h2>Log a New Event</h2>
-  <form id="eventForm">
-    <label>Trigger: <input type="text" id="trigger" required></label><br><br>
-    <label>Compulsion: <input type="text" id="compulsion"></label><br><br>
-    <label>Emotion: <input type="text" id="emotion"></label><br><br>
-    <label>Notes: <textarea id="notes"></textarea></label><br><br>
-    <button type="submit">Log Event</button>
-  </form>
-  <p id="submitMsg"></p>
+    <!-- EVENT FORM -->
+    <div class="card">
+      <h2>Log a New Event</h2>
+      <form id="eventForm">
+        <label>Trigger:</label>
+        <input type="text" id="trigger" required>
+        <label>Compulsion:</label>
+        <input type="text" id="compulsion">
+        <label>Emotion:</label>
+        <input type="text" id="emotion">
+        <label>Notes:</label>
+        <textarea id="notes"></textarea>
+        <button type="submit">Log Event</button>
+      </form>
+      <p id="submitMsg" class="msg"></p>
+    </div>
 
-  <canvas id="triggerChart" width="600" height="300"></canvas>
-  <canvas id="dailyChart" width="600" height="300"></canvas>
+    <!-- CHARTS -->
+    <div class="card">
+      <h2>Analytics</h2>
+      <canvas id="triggerChart" height="300"></canvas>
+      <canvas id="dailyChart" height="300"></canvas>
+      <pre id="data-output">Loading...</pre>
+    </div>
 
-  <pre id="data-output">Loading...</pre>
+    <footer>
+      <p>OCD Tracker 2025 • Built by Kamran Eisenberg</p>
+    </footer>
+  </div>
 
   <script>
-    let triggerChart = null;
+     let triggerChart = null;
     let dailyChart = null;
 
+    // Pick API base automatically
+    const API_BASE =
+      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
+        ? "http://127.0.0.1:5000"
+        : location.origin;
+    const api = (path) => `${API_BASE}${path}`;
+
+    // 🔹 Show/hide forms depending on auth state
+    function reflectAuthUI() {
+      const uid = localStorage.getItem('user_id');
+      const authed = !!uid;
+
+      document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
+      const loginForm = document.getElementById('loginForm');
+      if (loginForm) loginForm.style.display = authed ? 'none' : 'block';
+
+      document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
+      document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
+	  document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
+	  document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
+
+      if (!authed) {
+        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+      }
+    }
+
+    // 🔹 Logout clears auth
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      localStorage.removeItem('user_id');
+      reflectAuthUI();
+      document.getElementById('loginMsg').textContent = '';
+      document.getElementById('signupMsg').textContent = '';
+      document.getElementById('submitMsg').textContent = '';
+    });
+	document.getElementById('downloadCsvBtn').addEventListener('click', () => {
+	  const userId = localStorage.getItem('user_id');
+	  if (!userId) {
+		alert("Please log in first.");
+		return;
+	  }
+	  window.location = api(`/export/csv?user_id=${encodeURIComponent(userId)}`);
+	});
+	document.getElementById('downloadPdfBtn').addEventListener('click', () => {
+	  const userId = localStorage.getItem('user_id');
+	  if (!userId) {
+		alert("Please log in first.");
+		return;
+	  }
+	  window.location = api(`/export/pdf?user_id=${encodeURIComponent(userId)}`);
+	});
+
     function loadAnalytics() {
-      fetch('http://127.0.0.1:5000/analytics')
-        .then(response => response.json())
+      const userId = localStorage.getItem('user_id');
+      if (!userId) {
+        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+        return;
+      }
+
+      fetch(api(`/analytics?user_id=${encodeURIComponent(userId)}`))
+        .then(r => r.json())
         .then(data => renderDashboard(data))
         .catch(err => {
           console.error(err);
@@ -73,10 +264,7 @@
             fill: false
           }]
         },
-        options: {
-          responsive: true,
-          scales: { y: { beginAtZero: true } }
-        }
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
       const ctx = document.getElementById('triggerChart').getContext('2d');
@@ -90,10 +278,7 @@
             backgroundColor: 'rgba(75, 192, 192, 0.7)'
           }]
         },
-        options: {
-          responsive: true,
-          scales: { y: { beginAtZero: true } }
-        }
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
     }
 
@@ -103,22 +288,25 @@
       const email = document.getElementById('signupEmail').value;
       const password = document.getElementById('signupPassword').value;
 
-      const payload = { email: email, password: password }; // ✅ fixed key
+      const payload = { email: email, password: password };
 
       try {
-        const res = await fetch('http://127.0.0.1:5000/users', {
+        const res = await fetch(api('/users'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
 
+        const data = await res.json().catch(() => ({}));
+
         if (res.ok) {
-          const data = await res.json();
           localStorage.setItem('user_id', data.id);
           document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
+          reflectAuthUI();
+          loadAnalytics();
         } else {
-          const err = await res.json();
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (err.error || "Unknown error");
+          document.getElementById('signupMsg').textContent =
+            "Signup failed: " + (data.error || `HTTP ${res.status}`);
         }
       } catch (err) {
         console.error(err);
@@ -126,7 +314,7 @@
       }
     });
 
-    // --- 🔹 LOGIN FORM ---
+    // --- LOGIN FORM ---
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value;
@@ -135,25 +323,28 @@
       const payload = { email: email, password: password };
 
       try {
-        const res = await fetch('http://127.0.0.1:5000/login', {
+        const res = await fetch(api('/login'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
 
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
           document.getElementById('loginMsg').textContent = "Login successful!";
+          reflectAuthUI();
+          loadAnalytics();
         } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || "Unknown error");
+          document.getElementById('loginMsg').textContent =
+            "Login failed: " + (data.error || `HTTP ${res.status}`);
         }
       } catch (err) {
         console.error(err);
         document.getElementById('loginMsg').textContent = "Network error.";
       }
     });
-    // --- END LOGIN FORM ---
 
     // --- EVENT LOGGING FORM ---
     document.getElementById('eventForm').addEventListener('submit', async function (e) {
@@ -179,7 +370,7 @@
       };
 
       try {
-        const res = await fetch('http://127.0.0.1:5000/events', {
+        const res = await fetch(api('/events'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -197,6 +388,11 @@
       }
     });
 
-    loadAnalytics();
+    // Initialize UI
+    reflectAuthUI();
+    if (localStorage.getItem('user_id')) {
+      loadAnalytics();
+    }
   </script>
 </body>
+</html>
