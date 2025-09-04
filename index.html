@@ -1,314 +1,187 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>OCD Tracker Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <meta charset="utf-8"/>
+  <title>OCD Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    body { font-family: 'Segoe UI', Roboto, sans-serif; background:#f9fafc; color:#2C3E50; line-height:1.5; margin:0; padding:20px; }
-    .container { max-width:900px; margin:auto; }
-    header { text-align:center; margin-bottom:30px; }
-    h1 { color:#1ABC9C; margin-bottom:8px; }
-    h2 { color:#34495E; margin-top:0; }
-    .card { background:#fff; border-radius:10px; padding:20px; margin-bottom:20px; box-shadow:0 2px 6px rgba(0,0,0,0.08); }
-    label { display:block; margin:10px 0 5px; font-weight:500; }
-    input, textarea, button { width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; margin-bottom:12px; box-sizing:border-box; }
-    textarea { resize:vertical; }
-    button { background:#1ABC9C; color:white; border:none; font-weight:bold; cursor:pointer; transition:background 0.2s; }
-    button:hover { background:#16a085; }
-    button:disabled { background:#95a5a6; cursor:not-allowed; }
-    .actions { display:flex; gap:10px; flex-wrap:wrap; }
-    p.msg { font-size:14px; margin-top:-8px; margin-bottom:10px; }
-    footer { text-align:center; font-size:13px; color:#7f8c8d; margin-top:30px; }
-    @media (max-width: 600px) { body { padding:15px; } .actions { flex-direction:column; } }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu;max-width:960px;margin:32px auto;padding:0 16px}
+    h1{margin:0 0 8px}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;flex:1;min-width:280px}
+    input,textarea,button,select{font:inherit;padding:8px;border:1px solid #bbb;border-radius:8px;width:100%}
+    button{cursor:pointer}
+    .ok{color:#0a7d28}
+    .err{color:#a00}
+    pre{white-space:pre-wrap;word-wrap:break-word;background:#fafafa;border:1px dashed #ddd;border-radius:8px;padding:8px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .muted{color:#666}
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>OCD Tracker</h1>
-      <p>Your personal dashboard for tracking and reflection</p>
-    </header>
+  <h1>OCD Tracker</h1>
+  <div class="muted" id="apiInfo"></div>
+  <hr/>
 
-    <div class="card">
-      <h2>Sign Up</h2>
-      <form id="signupForm">
-        <label>Email:</label>
-        <input type="text" id="signupEmail" required>
-        <label>Password:</label>
-        <input type="password" id="signupPassword" required>
-        <button type="submit">Create Account</button>
-      </form>
-      <p id="signupMsg" class="msg"></p>
-    </div>
-
-    <div class="card">
-      <h2>Log In</h2>
-      <form id="loginForm">
-        <label>Email:</label>
-        <input type="text" id="loginEmail" required>
-        <label>Password:</label>
-        <input type="password" id="loginPassword" required>
-        <button type="submit">Log In</button>
-      </form>
-      <p id="loginMsg" class="msg"></p>
-      <div class="actions">
-        <button id="logoutBtn" style="display:none;">Log out</button>
-        <button id="downloadCsvBtn" style="display:none;">Download CSV</button>
-        <button id="downloadPdfBtn" style="display:none;">Download PDF</button>
+  <div class="row">
+    <div class="card" style="max-width:380px">
+      <h3>Auth</h3>
+      <div class="grid">
+        <input id="email" type="email" placeholder="email@example.com"/>
+        <input id="password" type="password" placeholder="password"/>
       </div>
+      <div class="row" style="margin-top:8px">
+        <button onclick="signup()">Sign Up</button>
+        <button onclick="login()">Log In</button>
+        <button onclick="logout()">Log Out</button>
+      </div>
+      <div id="authMsg" class="muted" style="margin-top:6px"></div>
+      <div class="muted" style="margin-top:8px">User ID: <code id="uid">—</code></div>
     </div>
 
     <div class="card">
-      <h2>Log a New Event</h2>
-      <form id="eventForm">
-        <label>Trigger:</label>
-        <input type="text" id="trigger" required>
-        <label>Compulsion:</label>
-        <input type="text" id="compulsion">
-        <label>Emotion:</label>
-        <input type="text" id="emotion">
-        <label>Notes:</label>
-        <textarea id="notes"></textarea>
-        <button type="submit">Log Event</button>
-      </form>
-      <p id="submitMsg" class="msg"></p>
-      <p id="aiMsg" class="msg"></p>
+      <h3>Log Event</h3>
+      <div class="grid">
+        <input id="trigger" placeholder="Trigger (required)"/>
+        <input id="compulsion" placeholder="Compulsion (optional)"/>
+        <input id="emotion" placeholder="Emotion (optional)"/>
+        <input id="ts" placeholder="Timestamp ISO (optional)"/>
+      </div>
+      <textarea id="notes" rows="4" placeholder="Notes (optional)"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button onclick="createEvent()">Save Event</button>
+        <button onclick="refreshAnalytics()">Refresh Analytics</button>
+      </div>
+      <div id="evtMsg" class="muted" style="margin-top:6px"></div>
     </div>
-
-    <div class="card">
-      <h2>Analytics</h2>
-      <canvas id="triggerChart" height="300"></canvas>
-      <canvas id="dailyChart" height="300"></canvas>
-      <pre id="data-output">Loading...</pre>
-    </div>
-
-    <footer>
-      <p>OCD Tracker 2025 • Built by Kamran Eisenberg</p>
-    </footer>
   </div>
 
-  <script>
-    let triggerChart = null;
-    let dailyChart = null;
+  <div class="row" style="margin-top:16px">
+    <div class="card">
+      <h3>AI Sentiment</h3>
+      <textarea id="aiNotes" rows="3" placeholder="Type something to analyze sentiment"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button onclick="analyze()">Analyze</button>
+      </div>
+      <pre id="aiOut" class="muted" style="margin-top:6px"></pre>
+    </div>
 
-    const API_BASE =
-      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-        ? "http://127.0.0.1:5000"
-        : "https://ocd-loop-tracker.onrender.com";
-    const api = (path) => `${API_BASE}${path}`;
+    <div class="card">
+      <h3>Analytics</h3>
+      <pre id="analytics" class="muted">—</pre>
+      <div class="row">
+        <button onclick="exportCsv()">Export CSV</button>
+        <button onclick="exportPdf()">Export PDF</button>
+      </div>
+    </div>
+  </div>
 
-    function reflectAuthUI() {
-      const uid = localStorage.getItem('user_id');
-      const authed = !!uid;
-      document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('loginForm').style.display  = authed ? 'none' : 'block';
-      document.getElementById('eventForm').style.display  = authed ? 'block' : 'none';
-      document.getElementById('logoutBtn').style.display  = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-      if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+<script>
+// Hard-lock to deployed API to avoid localhost mixups
+const API_BASE = "https://ocd-loop-tracker.onrender.com";
+document.getElementById("apiInfo").textContent = `API: ${API_BASE}`;
+
+function getUid(){ return localStorage.getItem("user_id") || ""; }
+function setUid(v){ localStorage.setItem("user_id", v); document.getElementById("uid").textContent = v || "—"; }
+setUid(getUid());
+
+async function signup(){
+  try{
+    const r = await fetch(`${API_BASE}/users`, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({email: email.value, password: password.value})});
+    const j = await r.json();
+    if(!r.ok){ throw new Error(j.error||"signup failed"); }
+    setUid(j.id);
+    authMsg.innerHTML = `<span class="ok">Signup successful.</span>`;
+  }catch(e){ authMsg.innerHTML = `<span class="err">${e}</span>`; }
+}
+
+async function login(){
+  try{
+    const r = await fetch(`${API_BASE}/login`, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({email: email.value, password: password.value})});
+    const j = await r.json();
+    if(!r.ok){ throw new Error(j.error||"login failed"); }
+    setUid(j.id);
+    authMsg.innerHTML = `<span class="ok">Login successful.</span>`;
+  }catch(e){ authMsg.innerHTML = `<span class="err">${e}</span>`; }
+}
+
+function logout(){ setUid(""); authMsg.textContent="Logged out."; }
+
+async function createEvent(){
+  if(!getUid()){ evtMsg.innerHTML = `<span class="err">Log in first.</span>`; return; }
+  try{
+    const payload = {
+      user_id: getUid(),
+      trigger: trigger.value,
+      compulsion: compulsion.value || null,
+      emotion: emotion.value || null,
+      notes: notes.value || null,
+      timestamp: ts.value || new Date().toISOString()
+    };
+    const r = await fetch(`${API_BASE}/events`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)});
+    const j = await r.json();
+    if(!r.ok){ throw new Error(j.error||"event failed"); }
+    evtMsg.innerHTML = `<span class="ok">Event logged.</span>`;
+    await refreshAnalytics();
+  }catch(e){ evtMsg.innerHTML = `<span class="err">${e}</span>`; }
+}
+
+async function refreshAnalytics(){
+  if(!getUid()){ analytics.textContent = "—"; return; }
+  try{
+    const r = await fetch(`${API_BASE}/analytics?user_id=${encodeURIComponent(getUid())}`);
+    const j = await r.json();
+    if(!r.ok){ throw new Error(j.error||"analytics failed"); }
+    analytics.textContent = JSON.stringify(j, null, 2);
+  }catch(e){ analytics.textContent = `error: ${e}`; }
+}
+
+async function analyze(){
+  try{
+    aiOut.textContent = "Analyzing…";
+    const body = JSON.stringify({ notes: aiNotes.value });
+    const headers = { "Content-Type": "application/json" };
+
+    let j, ok=false, err="";
+    for (let attempt=1; attempt<=3; attempt++){
+      const r = await fetch(`${API_BASE}/analyze`, { method:"POST", headers, body });
+      try { j = await r.json(); } catch(e){ j = {}; }
+      if (r.ok && (j.available || ("label" in j))) { ok=true; break; }
+
+      const reason = (j && j.reason || "").toLowerCase();
+      if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")){
+        await new Promise(res => setTimeout(res, 800 * attempt));
+        continue;
+      }
+      err = j && j.reason || `HTTP ${r.status}`;
+      break;
     }
 
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      localStorage.removeItem('user_id');
-      reflectAuthUI();
-      document.getElementById('loginMsg').textContent = '';
-      document.getElementById('signupMsg').textContent = '';
-      document.getElementById('submitMsg').textContent = '';
-      document.getElementById('aiMsg').textContent = '';
-    });
-
-    async function downloadUntilReady(url, filename, btn) {
-      btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = "Loading...";
-      while (true) {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const blob = await res.blob();
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            a.click();
-            break;
-          }
-        } catch {}
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      btn.disabled = false;
-      btn.textContent = originalText;
+    if (ok){
+      aiOut.textContent = `Label: ${j.label}  |  Score: ${Number(j.score ?? 0).toFixed(4)}`;
+      localStorage.setItem("lastAnalysis", JSON.stringify({ ts: new Date().toISOString(), ...j }));
+    }else{
+      const last = (j && (j.reason || j.error)) || err || "unknown";
+      aiOut.textContent = `AI analysis unavailable (${last}).`;
+      console.log("Analyze debug payload:", j);
     }
+  }catch(e){
+    aiOut.textContent = `error: ${e}`;
+  }
+}
 
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      const url = api(`/export/csv?user_id=${encodeURIComponent(userId)}`);
-      downloadUntilReady(url, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
-    });
+function exportCsv(){
+  if(!getUid()) return;
+  window.open(`${API_BASE}/export/csv?user_id=${encodeURIComponent(getUid())}`, "_blank");
+}
+function exportPdf(){
+  if(!getUid()) return;
+  window.open(`${API_BASE}/export/pdf?user_id=${encodeURIComponent(getUid())}`, "_blank");
+}
 
-    document.getElementById('downloadPdfBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      const url = api(`/export/pdf?user_id=${encodeURIComponent(userId)}`);
-      downloadUntilReady(url, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
-    });
-
-    function loadAnalytics() {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) {
-        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-        return;
-      }
-      fetch(api(`/analytics?user_id=${encodeURIComponent(userId)}`))
-        .then(r => r.json())
-        .then(data => renderDashboard(data))
-        .catch(() => { document.getElementById('data-output').textContent = 'Error loading data'; });
-    }
-
-    function renderDashboard(data) {
-      document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
-      const dates  = data.dailyCounts.map(entry => entry.date);
-      const counts = data.dailyCounts.map(entry => entry.count);
-      const labels = Object.keys(data.topTriggers);
-      const values = Object.values(data.topTriggers);
-
-      if (triggerChart) triggerChart.destroy();
-      if (dailyChart)   dailyChart.destroy();
-
-      const ctx2 = document.getElementById('dailyChart').getContext('2d');
-      dailyChart = new Chart(ctx2, {
-        type: 'line',
-        data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderWidth: 2, fill: false }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-
-      const ctx = document.getElementById('triggerChart').getContext('2d');
-      triggerChart = new Chart(ctx, {
-        type: 'bar',
-        data: { labels, datasets: [{ label: 'Trigger Frequency', data: values }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-    }
-
-    // SIGNUP
-    document.getElementById('signupForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const email = document.getElementById('signupEmail').value;
-      const password = document.getElementById('signupPassword').value;
-      try {
-        const res = await fetch(api('/users'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch {
-        document.getElementById('signupMsg').textContent = "Network error.";
-      }
-    });
-
-    // LOGIN
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const email = document.getElementById('loginEmail').value;
-      const password = document.getElementById('loginPassword').value;
-      try {
-        const res = await fetch(api('/login'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('loginMsg').textContent = "Login successful!";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch {
-        document.getElementById('loginMsg').textContent = "Network error.";
-      }
-    });
-
-    // EVENT + AI sentiment (10s timeout)
-    document.getElementById('eventForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const userId    = localStorage.getItem('user_id');
-      const submitMsg = document.getElementById('submitMsg');
-      const aiMsg     = document.getElementById('aiMsg');
-
-      if (!userId) { submitMsg.textContent = "No user ID found. Please sign up or log in first."; return; }
-
-      const trigger    = document.getElementById('trigger').value;
-      const compulsion = document.getElementById('compulsion').value;
-      const emotion    = document.getElementById('emotion').value;
-      const notes      = document.getElementById('notes').value;
-
-      aiMsg.textContent = notes.trim() ? "Analyzing notes..." : "";
-
-      try {
-        const res = await fetch(api('/events'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: userId,
-            timestamp: new Date().toISOString(),
-            trigger, compulsion, emotion, notes
-          })
-        });
-
-        if (res.ok) {
-          submitMsg.textContent = "Event logged.";
-          loadAnalytics();
-
-          if (notes.trim()) {
-            const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), 10000); // 10s cap
-            try {
-              const aiRes = await fetch(api('/analyze'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ notes }),
-                signal: ctrl.signal
-              });
-              clearTimeout(t);
-
-              if (aiRes.ok) {
-                const data = await aiRes.json();
-                aiMsg.textContent = data.label
-                  ? `AI sentiment: ${data.label} (${Math.round(data.score * 100)}%)`
-                  : "AI analysis unavailable.";
-              } else {
-                aiMsg.textContent = "AI analysis unavailable.";
-              }
-            } catch {
-              aiMsg.textContent = "AI analysis unavailable.";
-            }
-          } else {
-            aiMsg.textContent = "";
-          }
-        } else {
-          submitMsg.textContent = "Error logging event.";
-          aiMsg.textContent = "";
-        }
-      } catch {
-        submitMsg.textContent = "Network error.";
-        aiMsg.textContent = "";
-      }
-    });
-
-    reflectAuthUI();
-    if (localStorage.getItem('user_id')) loadAnalytics();
-  </script>
+refreshAnalytics();
+</script>
 </body>
 </html>
