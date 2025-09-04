@@ -263,9 +263,35 @@
           if (notes.trim()) {
             try {
               const aiRes = await fetch(api('/analyze'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ notes })
+if (notes.trim()) {
+  const aiController = new AbortController();
+  const aiTimer = setTimeout(() => aiController.abort(), 10000); // 10s cap
+
+  try {
+    const aiRes = await fetch(api('/analyze'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+      signal: aiController.signal
+    });
+    clearTimeout(aiTimer);
+
+    if (aiRes.ok) {
+      const data = await aiRes.json();
+      if (data.label) {
+        aiMsg.textContent = `AI sentiment: ${data.label} (${Math.round(data.score * 100)}%)`;
+      } else {
+        aiMsg.textContent = "AI analysis unavailable.";
+      }
+    } else {
+      aiMsg.textContent = "AI analysis unavailable.";
+    }
+  } catch {
+    aiMsg.textContent = "AI analysis unavailable.";
+  }
+} else {
+  aiMsg.textContent = "";
+}
               });
               if (aiRes.ok) {
                 const data = await aiRes.json();

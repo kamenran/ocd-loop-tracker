@@ -5,6 +5,7 @@ import time
 import uuid
 import requests
 import psycopg2
+import time, requests
 from datetime import datetime
 from io import BytesIO
 
@@ -25,13 +26,13 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 # ------------------------------------------------------------------------------
 # Hugging Face Inference API (no local model = no OOM on Render free tier)
 # ------------------------------------------------------------------------------
+
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
-HF_MODEL = os.getenv(
-    "HUGGINGFACE_MODEL",
-    "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
-)
+HF_MODEL = os.getenv("HUGGINGFACE_MODEL", "distilbert/distilbert-base-uncased-finetuned-sst-2-english")
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-HF_TIMEOUT = 12  # seconds
+HF_TIMEOUT = 6
+HF_MAX_ATTEMPTS = 2
+
 
 # --- Database connection setup ---
 def fGetConnection():
@@ -54,6 +55,13 @@ def version():
         "model": HF_MODEL
     }), 200
 
+@app.route("/debug/analyze")
+def debug_analyze():
+    from os import getenv
+    return jsonify({
+        "has_key": bool(getenv("HUGGINGFACE_API_KEY", "")),
+        "note": "This just checks the env var exists. It does NOT call the model."
+    }), 200
 # --- Route to create a new user ---
 @app.route("/users", methods=["POST"])
 def fPostUser():
@@ -330,35 +338,36 @@ def fAnalyze():
         "Content-Type": "application/json",
     }
 
-    for attempt in range(4):
+    start = time.monotonic()
+    for attempt in range(HF_MAX_ATTEMPTS):
         try:
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
-            if resp.status_code in (503, 524):  # model loading or edge timeout
-                time.sleep(1.5 * (attempt + 1))
+            r = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
+            if r.status_code in (503, 524, 429):  # loading or rate-limited
+                time.sleep(0.7 * (attempt + 1))
                 continue
-            if resp.status_code == 429:  # rate limit
-                time.sleep(2.0 * (attempt + 1))
-                continue
-            if not resp.ok:
-                return jsonify({"error": f"HuggingFace API error {resp.status_code}: {resp.text[:200]}"}), 502
+            if not r.ok:
+                return jsonify({"error": f"HuggingFace API error {r.status_code}", "body": r.text[:200]}), 502
 
-            out = resp.json()
-            # Expect: [ {label, score}, ... ]  OR  [[ {label, score}, ... ]]
-            if isinstance(out, list):
-                inner = out[0] if out and isinstance(out[0], list) else out
+            resp = r.json()
+            # supports [ {label, score}, ... ] or nested [[...]]
+            if isinstance(resp, list):
+                inner = resp[0] if resp and isinstance(resp[0], list) else resp
                 if inner and isinstance(inner[0], dict) and "label" in inner[0]:
                     top = max(inner, key=lambda x: x.get("score", 0))
-                    return jsonify(
-                        {"label": top["label"], "score": round(float(top["score"]), 4), "model": HF_MODEL}
-                    )
-            return jsonify({"error": "Unexpected HF response format", "raw": out}), 502
+                    return jsonify({
+                        "label": top["label"],
+                        "score": round(float(top["score"]), 4),
+                        "model": HF_MODEL
+                    })
+            return jsonify({"error": "Unexpected HF response format", "raw": resp}), 502
 
         except requests.Timeout:
-            time.sleep(1.0 * (attempt + 1))
+            continue
         except Exception as e:
             return jsonify({"error": f"Analysis failed: {e}"}), 500
 
-    return jsonify({"error": "Model is loading or rate-limited. Try again shortly."}), 503
+    elapsed = time.monotonic() - start
+    return jsonify({"error": f"Model is warming up or rate-limited (waited ~{int(elapsed)}s). Try again."}), 503
 
 if __name__ == "__main__":
     # Local dev only; Render uses gunicorn.
