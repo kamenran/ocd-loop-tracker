@@ -89,238 +89,231 @@
   </div>
 
   <script>
-    let triggerChart = null;
-    let dailyChart = null;
+  <script>
+  let triggerChart = null;
+  let dailyChart = null;
 
-    const API_BASE =
-      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-        ? "http://127.0.0.1:5000"
-        : "https://ocd-loop-tracker.onrender.com";
-    const api = (path) => `${API_BASE}${path}`;
+  // Force calls to your deployed API so it works even when opening the file locally
+  const API_BASE = "https://ocd-loop-tracker.onrender.com";
+  const api = (path) => `${API_BASE}${path}`;
 
-    function reflectAuthUI() {
-      const uid = localStorage.getItem('user_id');
-      const authed = !!uid;
-      document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
-      document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-      if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+  function reflectAuthUI() {
+    const uid = localStorage.getItem('user_id');
+    const authed = !!uid;
+    document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
+    document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
+    document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
+    document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
+    document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
+    document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
+    if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+  }
+
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    localStorage.removeItem('user_id');
+    reflectAuthUI();
+    document.getElementById('loginMsg').textContent = '';
+    document.getElementById('signupMsg').textContent = '';
+    document.getElementById('submitMsg').textContent = '';
+    document.getElementById('aiMsg').textContent = '';
+  });
+
+  async function downloadUntilReady(url, filename, btn) {
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Loading...";
+    while (true) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const blob = await res.blob();
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          a.click();
+          break;
+        }
+      } catch (e) {}
+      await new Promise(r => setTimeout(r, 2000));
     }
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      localStorage.removeItem('user_id');
-      reflectAuthUI();
-      document.getElementById('loginMsg').textContent = '';
-      document.getElementById('signupMsg').textContent = '';
-      document.getElementById('submitMsg').textContent = '';
-      document.getElementById('aiMsg').textContent = '';
+  document.getElementById('downloadCsvBtn').addEventListener('click', () => {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) { alert("Please log in first."); return; }
+    const url = api(`/export/csv?user_id=${encodeURIComponent(userId)}`);
+    downloadUntilReady(url, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
+  });
+
+  document.getElementById('downloadPdfBtn').addEventListener('click', () => {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) { alert("Please log in first."); return; }
+    const url = api(`/export/pdf?user_id=${encodeURIComponent(userId)}`);
+    downloadUntilReady(url, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
+  });
+
+  function loadAnalytics() {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) {
+      document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+      return;
+    }
+    fetch(api(`/analytics?user_id=${encodeURIComponent(userId)}`))
+      .then(r => r.json())
+      .then(data => renderDashboard(data))
+      .catch(() => { document.getElementById('data-output').textContent = 'Error loading data'; });
+  }
+
+  function renderDashboard(data) {
+    document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
+    const dates = data.dailyCounts.map(entry => entry.date);
+    const counts = data.dailyCounts.map(entry => entry.count);
+    const labels = Object.keys(data.topTriggers);
+    const values = Object.values(data.topTriggers);
+
+    if (triggerChart) triggerChart.destroy();
+    if (dailyChart) dailyChart.destroy();
+
+    const ctx2 = document.getElementById('dailyChart').getContext('2d');
+    dailyChart = new Chart(ctx2, {
+      type: 'line',
+      data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
     });
 
-    async function downloadUntilReady(url, filename, btn) {
-      btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = "Loading...";
-      while (true) {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const blob = await res.blob();
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            a.click();
-            break;
-          }
-        } catch (e) {}
-        await new Promise(r => setTimeout(r, 2000));
+    const ctx = document.getElementById('triggerChart').getContext('2d');
+    triggerChart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+  }
+
+  // SIGNUP
+  document.getElementById('signupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('signupEmail').value;
+    const password = document.getElementById('signupPassword').value;
+    try {
+      const res = await fetch(api('/users'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        localStorage.setItem('user_id', data.id);
+        document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
+        reflectAuthUI(); loadAnalytics();
+      } else {
+        document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
       }
-      btn.disabled = false;
-      btn.textContent = originalText;
+    } catch {
+      document.getElementById('signupMsg').textContent = "Network error.";
     }
+  });
 
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      const url = api(`/export/csv?user_id=${encodeURIComponent(userId)}`);
-      downloadUntilReady(url, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
-    });
+  // LOGIN
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
+    try {
+      const res = await fetch(api('/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        localStorage.setItem('user_id', data.id);
+        document.getElementById('loginMsg').textContent = "Login successful!";
+        reflectAuthUI(); loadAnalytics();
+      } else {
+        document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
+      }
+    } catch {
+      document.getElementById('loginMsg').textContent = "Network error.";
+    }
+  });
 
-    document.getElementById('downloadPdfBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      const url = api(`/export/pdf?user_id=${encodeURIComponent(userId)}`);
-      downloadUntilReady(url, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
-    });
+  // EVENT + AI sentiment
+  document.getElementById('eventForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const userId = localStorage.getItem('user_id');
+    const submitMsg = document.getElementById('submitMsg');
+    const aiMsg = document.getElementById('aiMsg');
 
-    function loadAnalytics() {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) {
-        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+    if (!userId) { submitMsg.textContent = "No user ID found. Please sign up or log in first."; return; }
+
+    const trigger = document.getElementById('trigger').value;
+    const compulsion = document.getElementById('compulsion').value;
+    const emotion = document.getElementById('emotion').value;
+    const notes = document.getElementById('notes').value;
+
+    aiMsg.textContent = notes.trim() ? "Analyzing notes..." : "";
+
+    try {
+      const res = await fetch(api('/events'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          timestamp: new Date().toISOString(),
+          trigger, compulsion, emotion, notes
+        })
+      });
+
+      if (!res.ok) {
+        submitMsg.textContent = "Error logging event.";
+        aiMsg.textContent = "";
         return;
       }
-      fetch(api(`/analytics?user_id=${encodeURIComponent(userId)}`))
-        .then(r => r.json())
-        .then(data => renderDashboard(data))
-        .catch(() => { document.getElementById('data-output').textContent = 'Error loading data'; });
-    }
 
-    function renderDashboard(data) {
-      document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
-      const dates = data.dailyCounts.map(entry => entry.date);
-      const counts = data.dailyCounts.map(entry => entry.count);
-      const labels = Object.keys(data.topTriggers);
-      const values = Object.values(data.topTriggers);
+      submitMsg.textContent = "Event logged.";
+      loadAnalytics();
 
-      if (triggerChart) triggerChart.destroy();
-      if (dailyChart) dailyChart.destroy();
+      if (notes.trim()) {
+        const aiController = new AbortController();
+        const aiTimer = setTimeout(() => aiController.abort(), 10000); // 10s cap
+        try {
+          const aiRes = await fetch(api('/analyze'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes }),
+            signal: aiController.signal
+          });
+          clearTimeout(aiTimer);
 
-      const ctx2 = document.getElementById('dailyChart').getContext('2d');
-      dailyChart = new Chart(ctx2, {
-        type: 'line',
-        data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-
-      const ctx = document.getElementById('triggerChart').getContext('2d');
-      triggerChart = new Chart(ctx, {
-        type: 'bar',
-        data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-    }
-
-    document.getElementById('signupForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const email = document.getElementById('signupEmail').value;
-      const password = document.getElementById('signupPassword').value;
-      try {
-        const res = await fetch(api('/users'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch {
-        document.getElementById('signupMsg').textContent = "Network error.";
-      }
-    });
-
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const email = document.getElementById('loginEmail').value;
-      const password = document.getElementById('loginPassword').value;
-      try {
-        const res = await fetch(api('/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('loginMsg').textContent = "Login successful!";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch {
-        document.getElementById('loginMsg').textContent = "Network error.";
-      }
-    });
-
-    document.getElementById('eventForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const userId = localStorage.getItem('user_id');
-      const submitMsg = document.getElementById('submitMsg');
-      const aiMsg = document.getElementById('aiMsg');
-
-      if (!userId) { submitMsg.textContent = "No user ID found. Please sign up or log in first."; return; }
-
-      const trigger = document.getElementById('trigger').value;
-      const compulsion = document.getElementById('compulsion').value;
-      const emotion = document.getElementById('emotion').value;
-      const notes = document.getElementById('notes').value;
-
-      aiMsg.textContent = notes.trim() ? "Analyzing notes..." : "";
-
-      try {
-        const res = await fetch(api('/events'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: userId,
-            timestamp: new Date().toISOString(),
-            trigger, compulsion, emotion, notes
-          })
-        });
-
-        if (res.ok) {
-          submitMsg.textContent = "Event logged.";
-          loadAnalytics();
-
-          if (notes.trim()) {
-            try {
-              const aiRes = await fetch(api('/analyze'), {
-if (notes.trim()) {
-  const aiController = new AbortController();
-  const aiTimer = setTimeout(() => aiController.abort(), 10000); // 10s cap
-
-  try {
-    const aiRes = await fetch(api('/analyze'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes }),
-      signal: aiController.signal
-    });
-    clearTimeout(aiTimer);
-
-    if (aiRes.ok) {
-      const data = await aiRes.json();
-      if (data.label) {
-        aiMsg.textContent = `AI sentiment: ${data.label} (${Math.round(data.score * 100)}%)`;
-      } else {
-        aiMsg.textContent = "AI analysis unavailable.";
-      }
-    } else {
-      aiMsg.textContent = "AI analysis unavailable.";
-    }
-  } catch {
-    aiMsg.textContent = "AI analysis unavailable.";
-  }
-} else {
-  aiMsg.textContent = "";
-}
-              });
-              if (aiRes.ok) {
-                const data = await aiRes.json();
-                if (data.label) {
-                  aiMsg.textContent = `AI sentiment: ${data.label} (${Math.round(data.score * 100)}%)`;
-                } else {
-                  aiMsg.textContent = "AI analysis unavailable.";
-                }
-              } else {
-                aiMsg.textContent = "AI analysis unavailable.";
-              }
-            } catch {
+          if (aiRes.ok) {
+            const data = await aiRes.json();
+            if (data.label) {
+              aiMsg.textContent = `AI sentiment: ${data.label} (${Math.round(data.score * 100)}%)`;
+            } else {
               aiMsg.textContent = "AI analysis unavailable.";
             }
           } else {
-            aiMsg.textContent = "";
+            aiMsg.textContent = "AI analysis unavailable.";
           }
-        } else {
-          submitMsg.textContent = "Error logging event.";
-          aiMsg.textContent = "";
+        } catch {
+          aiMsg.textContent = "AI analysis unavailable.";
         }
-      } catch {
-        submitMsg.textContent = "Network error.";
+      } else {
         aiMsg.textContent = "";
       }
-    });
+    } catch {
+      submitMsg.textContent = "Network error.";
+      aiMsg.textContent = "";
+    }
+  });
 
-    reflectAuthUI();
-    if (localStorage.getItem('user_id')) loadAnalytics();
-  </script>
+  // Init
+  reflectAuthUI();
+  if (localStorage.getItem('user_id')) loadAnalytics();
+</script>
+
+</script>
 </body>
 </html>
