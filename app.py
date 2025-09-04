@@ -14,20 +14,32 @@ import csv
 import os
 import io
 from flask import Response
-from transformers import pipeline
+import time
+import requests
+
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
-CORS(app)  #Allows frontend (dashboard.html) to access this backend
+CORS(app)  # Allows frontend (dashboard.html) to access this backend
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
-sentiment_pipeline = pipeline("sentiment-analysis")
+
+# ------------------------------------------------------------------------------
+# Config for Hugging Face Inference API (Third Way)
+# ------------------------------------------------------------------------------
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
+HF_MODEL = os.getenv(
+    "HUGGINGFACE_MODEL",
+    "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+)
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_TIMEOUT = 12  # seconds
+
 # --- Database connection setup ---
-
-
 def fGetConnection():
     conn_str = os.getenv("DATABASE_URL")
     if not conn_str:
         raise Exception("DATABASE_URL not set")
     return psycopg2.connect(conn_str)
+
 # --- Route to create a new user ---
 @app.route("/users", methods=["POST"])
 def fPostUser():
@@ -57,7 +69,8 @@ def fPostUser():
         return jsonify({"id": sId}), 201
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500# --- Route to create a new OCD event ---
+        return jsonify({"error": str(e)}), 500
+
 # --- Route to log in a user ---
 @app.route("/login", methods=["POST"])
 def fLogin():
@@ -131,7 +144,6 @@ def create_event():
         print("Error inserting:", e)
         return jsonify({'error': str(e)}), 500
 
-
 # --- Route to get analytics data (per user) ---
 @app.route('/analytics', methods=['GET'])
 def fGetAnalytics():
@@ -176,6 +188,8 @@ def fGetAnalytics():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# --- Export CSV (Email, Trigger, Compulsion, Emotion, Notes) ---
 @app.route('/export/csv', methods=['GET'])
 def fExportCSV():
     sUserId = request.args.get('user_id')
@@ -197,7 +211,6 @@ def fExportCSV():
         colnames = ["Email", "Trigger", "Compulsion", "Emotion", "Notes"]
         cur.close(); conn.close()
 
-        import io, csv
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(colnames)
@@ -209,6 +222,8 @@ def fExportCSV():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# --- Export PDF (Email, Trigger, Compulsion, Emotion, Notes) ---
 @app.route('/export/pdf', methods=['GET'])
 def fExportPDF():
     sUserId = request.args.get('user_id')
@@ -233,19 +248,12 @@ def fExportPDF():
         return jsonify({'error': f'DB error: {e}'}), 500
 
     try:
-        from io import BytesIO
-        from reportlab.lib.pagesizes import LETTER
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-        from reportlab.lib import colors
-        from reportlab.lib.styles import getSampleStyleSheet
-
         buf = BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=LETTER, title="OCD Events Export")
 
         styles = getSampleStyleSheet()
         wrapped_rows = []
         for r in rows:
-            # Wrap notes into a Paragraph so long text doesn’t overflow
             email, trigger, compulsion, emotion, notes = r
             notes_para = Paragraph(notes if notes else "", styles["Normal"])
             wrapped_rows.append([email, trigger, compulsion, emotion, notes_para])
@@ -273,27 +281,25 @@ def fExportPDF():
 
     except Exception as e:
         return jsonify({'error': f'PDF error: {e}'}), 500
-# --- DEBUG: list active routes on the deployed app ---
+
+# --- DEBUG: list active routes ---
 @app.route("/debug/routes")
 def debug_routes():
     return jsonify(sorted([str(r) for r in app.url_map.iter_rules()])), 200
 
-# --- DEBUG: verify reportlab is installed & usable on Render ---
+# --- DEBUG: verify reportlab ---
 @app.route("/debug/reportlab")
 def debug_reportlab():
     try:
         import reportlab, reportlab.pdfgen.canvas as C
-        from io import BytesIO
         b = BytesIO(); c = C.Canvas(b); c.drawString(72, 750, "OK"); c.save()
         return jsonify({"reportlab": getattr(reportlab, "__version__", "unknown")})
     except Exception as e:
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
-# --- SANITY: trivial PDF route (no DB) to rule out SQL issues ---
+# --- SANITY: trivial PDF route (no DB) ---
 @app.route("/export/pdf/test", methods=["GET"])
 def fExportPDFTest():
-    from io import BytesIO
-    from reportlab.lib.pagesizes import LETTER
     from reportlab.pdfgen import canvas
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=LETTER)
@@ -302,21 +308,62 @@ def fExportPDFTest():
     buf.seek(0)
     return send_file(buf, mimetype="application/pdf",
                      as_attachment=True, download_name="test.pdf")
+
+# --- Sentiment Analysis via Hugging Face Inference API (stateless, retry on loading) ---
 @app.route("/analyze", methods=["POST"])
 def fAnalyze():
-    data = request.get_json()
-    text = data.get("notes", "")
+    if not HF_API_KEY:
+        return jsonify({"error": "HUGGINGFACE_API_KEY not set on server"}), 500
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("notes") or "").strip()
     if not text:
         return jsonify({"error": "notes is required"}), 400
 
-    try:
-        # Truncate to avoid overly long input
-        result = sentiment_pipeline(text[:500])[0]
-        return jsonify({
-            "label": result["label"],
-            "score": round(float(result["score"]), 4)
-        })
-    except Exception as e:
-        return jsonify({"error": f"Analysis failed: {e}"}), 500
+    payload = {"inputs": text[:600]}  # keep it short
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # Retry a few times if model is still loading (HF returns 503)
+    for attempt in range(4):
+        try:
+            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
+            # Model loading or throttling
+            if resp.status_code in (503, 524):
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            if resp.status_code == 429:
+                # rate limited
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            if not resp.ok:
+                return jsonify({"error": f"HuggingFace API error {resp.status_code}: {resp.text[:200]}"}), 502
+
+            data = resp.json()
+            # HF sentiment returns either:
+            # [ {label, score}, ... ]  OR  [[ {label, score}, ... ]]
+            if isinstance(data, list):
+                inner = data[0] if data and isinstance(data[0], list) else data
+                if inner and isinstance(inner[0], dict) and "label" in inner[0]:
+                    top = sorted(inner, key=lambda x: x.get("score", 0), reverse=True)[0]
+                    return jsonify({
+                        "label": top["label"],
+                        "score": round(float(top["score"]), 4),
+                        "model": HF_MODEL
+                    })
+            # Fallback
+            return jsonify({"error": "Unexpected HF response format", "raw": data}), 502
+
+        except requests.Timeout:
+            # Try again on timeout
+            time.sleep(1.0 * (attempt + 1))
+        except Exception as e:
+            return jsonify({"error": f"Analysis failed: {e}"}), 500
+
+    return jsonify({"error": "Model is loading or rate-limited. Try again shortly."}), 503
+
 if __name__ == "__main__":
+    # For local dev only; Render will run via gunicorn
     app.run(debug=True, host="127.0.0.1", port=5000)
