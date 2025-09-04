@@ -215,6 +215,7 @@ def fExportPDF():
     if not sUserId:
         return jsonify({'error': 'user_id is required'}), 400
 
+    # --- fetch rows ---
     try:
         conn = fGetConnection()
         cur = conn.cursor()
@@ -228,35 +229,55 @@ def fExportPDF():
         colnames = [desc[0] for desc in cur.description]
         cur.close()
         conn.close()
+    except Exception as e:
+        return jsonify({'error': f'DB error: {e}'}), 500
 
-        # Build a simple PDF table in-memory
+    # --- build PDF in memory ---
+    try:
         buf = BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=LETTER, title="OCD Events Export")
-        styles = getSampleStyleSheet()
 
-        # Header row + data (format timestamp nicely)
+        # table data
         data = [colnames]
-        for row in rows:
-            row = list(row)
-            # last col is timestamp
-            if row[-1] is not None:
-                try:
-                    row[-1] = row[-1].strftime("%Y-%m-%d %H:%M")
-                except Exception:
-                    row[-1] = str(row[-1])
-            # optionally truncate long notes to keep table readable
-            if row[5] and len(str(row[5])) > 200:
-                row[5] = str(row[5])[:200] + "..."
-            data.append(row)
+        for r in rows:
+            r = list(r)
+            # timestamp → string, defensively
+            try:
+                r[-1] = r[-1].strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                r[-1] = str(r[-1]) if r[-1] is not None else ""
+            # trim very long notes
+            if r[5] and len(str(r[5])) > 200:
+                r[5] = str(r[5])[:200] + "..."
+            data.append(r)
 
         table = Table(data, hAlign='LEFT')
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1ABC9C')),
-            ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
-            ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE',   (0,0), (-1,0), 10),
-            ('GRID',       (0,0), (-1,-1), 0.25, colors.grey),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [c]()
+            ('BACKGROUND',      (0,0), (-1,0), colors.HexColor('#1ABC9C')),
+            ('TEXTCOLOR',       (0,0), (-1,0), colors.white),
+            ('FONTNAME',        (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE',        (0,0), (-1,0), 10),
+            ('GRID',            (0,0), (-1,-1), 0.25, colors.grey),
+            ('ROWBACKGROUNDS',  (0,1), (-1,-1), [colors.whitesmoke, colors.HexColor('#F7F9FB')]),
+            ('FONTSIZE',        (0,1), (-1,-1), 9),
+            ('VALIGN',          (0,0), (-1,-1), 'TOP'),
+        ]))
+
+        # optional title
+        styles = getSampleStyleSheet()
+        title = Paragraph(f"<b>OCD Tracker — Events Export</b><br/>User: {sUserId}", styles['Title'])
+
+        doc.build([title, table])
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f"events_{sUserId}.pdf"
+        )
+    except Exception as e:
+        return jsonify({'error': f'PDF error: {e}'}), 500
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)
