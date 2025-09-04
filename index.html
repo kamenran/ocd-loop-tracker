@@ -1,49 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8" />
   <title>OCD Tracker Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body {
-      font-family: 'Segoe UI', Roboto, sans-serif;
-      background: #f9fafc;
-      color: #2C3E50;
-      line-height: 1.5;
-      margin: 0;
-      padding: 20px;
-    }
-    .container { max-width: 900px; margin: auto; }
-    header { text-align: center; margin-bottom: 30px; }
-    h1 { color: #1ABC9C; margin-bottom: 8px; }
-    h2 { color: #34495E; margin-top: 0; }
-    .card {
-      background: #fff;
-      border-radius: 10px;
-      padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    }
-    label { display: block; margin: 10px 0 5px; font-weight: 500; }
-    input, textarea, button {
-      width: 100%; padding: 10px; border: 1px solid #ddd;
-      border-radius: 6px; font-size: 14px; margin-bottom: 12px;
-      box-sizing: border-box;
-    }
-    textarea { resize: vertical; }
-    button {
-      background: #1ABC9C; color: white; border: none;
-      font-weight: bold; cursor: pointer; transition: background 0.2s;
-    }
-    button:hover { background: #16a085; }
-    button:disabled { background: #95a5a6; cursor: not-allowed; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-    p.msg { font-size: 14px; margin-top: -8px; margin-bottom: 10px; }
-    p.error { color: #e74c3c; }
-    p.success { color: #27ae60; }
-    footer {
-      text-align: center; font-size: 13px; color: #7f8c8d; margin-top: 30px;
-    }
-    @media (max-width: 600px) { body { padding: 15px; } .actions { flex-direction: column; } }
+    body { font-family: 'Segoe UI', Roboto, sans-serif; background:#f9fafc; color:#2C3E50; line-height:1.5; margin:0; padding:20px; }
+    .container { max-width:900px; margin:auto; }
+    header { text-align:center; margin-bottom:30px; }
+    h1 { color:#1ABC9C; margin-bottom:8px; }
+    h2 { color:#34495E; margin-top:0; }
+    .card { background:#fff; border-radius:10px; padding:20px; margin-bottom:20px; box-shadow:0 2px 6px rgba(0,0,0,0.08); }
+    label { display:block; margin:10px 0 5px; font-weight:500; }
+    input, textarea, button { width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; margin-bottom:12px; box-sizing:border-box; }
+    textarea { resize:vertical; }
+    button { background:#1ABC9C; color:white; border:none; font-weight:bold; cursor:pointer; transition:background 0.2s; }
+    button:hover { background:#16a085; }
+    button:disabled { background:#95a5a6; cursor:not-allowed; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; }
+    p.msg { font-size:14px; margin-top:-8px; margin-bottom:10px; }
+    footer { text-align:center; font-size:13px; color:#7f8c8d; margin-top:30px; }
+    @media (max-width: 600px) { body { padding:15px; } .actions { flex-direction:column; } }
   </style>
 </head>
 <body>
@@ -53,7 +30,6 @@
       <p>Your personal dashboard for tracking and reflection</p>
     </header>
 
-    <!-- SIGN UP -->
     <div class="card">
       <h2>Sign Up</h2>
       <form id="signupForm">
@@ -66,7 +42,6 @@
       <p id="signupMsg" class="msg"></p>
     </div>
 
-    <!-- LOGIN -->
     <div class="card">
       <h2>Log In</h2>
       <form id="loginForm">
@@ -84,7 +59,6 @@
       </div>
     </div>
 
-    <!-- EVENT FORM -->
     <div class="card">
       <h2>Log a New Event</h2>
       <form id="eventForm">
@@ -102,7 +76,6 @@
       <p id="aiMsg" class="msg"></p>
     </div>
 
-    <!-- CHARTS -->
     <div class="card">
       <h2>Analytics</h2>
       <canvas id="triggerChart" height="300"></canvas>
@@ -161,9 +134,7 @@
             a.click();
             break;
           }
-        } catch (e) {
-          console.warn("Retrying after error:", e);
-        }
+        } catch (e) {}
         await new Promise(r => setTimeout(r, 2000));
       }
       btn.disabled = false;
@@ -193,10 +164,7 @@
       fetch(api(`/analytics?user_id=${encodeURIComponent(userId)}`))
         .then(r => r.json())
         .then(data => renderDashboard(data))
-        .catch(err => {
-          console.error(err);
-          document.getElementById('data-output').textContent = 'Error loading data';
-        });
+        .catch(() => { document.getElementById('data-output').textContent = 'Error loading data'; });
     }
 
     function renderDashboard(data) {
@@ -205,14 +173,17 @@
       const counts = data.dailyCounts.map(entry => entry.count);
       const labels = Object.keys(data.topTriggers);
       const values = Object.values(data.topTriggers);
+
       if (triggerChart) triggerChart.destroy();
       if (dailyChart) dailyChart.destroy();
+
       const ctx2 = document.getElementById('dailyChart').getContext('2d');
       dailyChart = new Chart(ctx2, {
         type: 'line',
         data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
+
       const ctx = document.getElementById('triggerChart').getContext('2d');
       triggerChart = new Chart(ctx, {
         type: 'bar',
@@ -221,13 +192,12 @@
       });
     }
 
-    document.getElementById('signupForm').addEventListener('submit', async function (e) {
+    document.getElementById('signupForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = document.getElementById('signupEmail').value;
       const password = document.getElementById('signupPassword').value;
-      const payload = { email, password };
       try {
-        const res = await fetch(api('/users'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const res = await fetch(api('/users'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
@@ -236,16 +206,17 @@
         } else {
           document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
         }
-      } catch { document.getElementById('signupMsg').textContent = "Network error."; }
+      } catch {
+        document.getElementById('signupMsg').textContent = "Network error.";
+      }
     });
 
-    document.getElementById('loginForm').addEventListener('submit', async function (e) {
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value;
       const password = document.getElementById('loginPassword').value;
-      const payload = { email, password };
       try {
-        const res = await fetch(api('/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const res = await fetch(api('/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
@@ -254,20 +225,18 @@
         } else {
           document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
         }
-      } catch { document.getElementById('loginMsg').textContent = "Network error."; }
+      } catch {
+        document.getElementById('loginMsg').textContent = "Network error.";
+      }
     });
 
-    // --- EVENT SUBMIT HANDLER WITH SENTIMENT ---
-    document.getElementById('eventForm').addEventListener('submit', async function (e) {
+    document.getElementById('eventForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const userId = localStorage.getItem('user_id');
       const submitMsg = document.getElementById('submitMsg');
       const aiMsg = document.getElementById('aiMsg');
 
-      if (!userId) {
-        submitMsg.textContent = "No user ID found. Please sign up or log in first.";
-        return;
-      }
+      if (!userId) { submitMsg.textContent = "No user ID found. Please sign up or log in first."; return; }
 
       const trigger = document.getElementById('trigger').value;
       const compulsion = document.getElementById('compulsion').value;
@@ -276,20 +245,15 @@
 
       aiMsg.textContent = notes.trim() ? "Analyzing notes..." : "";
 
-      const payload = {
-        user_id: userId,
-        timestamp: new Date().toISOString(),
-        trigger,
-        compulsion,
-        emotion,
-        notes
-      };
-
       try {
         const res = await fetch(api('/events'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({
+            user_id: userId,
+            timestamp: new Date().toISOString(),
+            trigger, compulsion, emotion, notes
+          })
         });
 
         if (res.ok) {
