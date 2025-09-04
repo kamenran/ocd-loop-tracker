@@ -5,7 +5,6 @@ import time
 import uuid
 import requests
 import psycopg2
-import time, requests
 from datetime import datetime
 from io import BytesIO
 
@@ -13,7 +12,7 @@ from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 
-# PDF bits
+# PDF generation
 from reportlab.lib.pagesizes import LETTER
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib import colors
@@ -24,25 +23,23 @@ bcrypt = Bcrypt(app)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 # ------------------------------------------------------------------------------
-# Hugging Face Inference API (no local model = no OOM on Render free tier)
+# Hugging Face Inference API (stateless; avoids loading large models on Render)
 # ------------------------------------------------------------------------------
-
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 HF_MODEL = os.getenv("HUGGINGFACE_MODEL", "distilbert/distilbert-base-uncased-finetuned-sst-2-english")
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-HF_TIMEOUT = 6
-HF_MAX_ATTEMPTS = 2
-
+HF_TIMEOUT = 6          # seconds per request
+HF_MAX_ATTEMPTS = 2     # short retry loop
 
 # --- Database connection setup ---
 def fGetConnection():
     conn_str = os.getenv("DATABASE_URL")
     if not conn_str:
         raise Exception("DATABASE_URL not set")
-    # Render’s PostgreSQL usually includes sslmode=require already.
+    # Render’s DATABASE_URL usually includes sslmode=require already.
     return psycopg2.connect(conn_str)
 
-# --- Health/version (helpful for verifying the right build) ---
+# --- Health/version/debug ---
 @app.route("/healthz")
 def healthz():
     return "ok", 200
@@ -51,24 +48,23 @@ def healthz():
 def version():
     return jsonify({
         "mode": "hf-inference",
-        "imports": "no-transformers",
         "model": HF_MODEL
     }), 200
 
-@app.route("/debug/analyze")
+@app.route("/debug/analyze", methods=["GET"])
 def debug_analyze():
-    from os import getenv
     return jsonify({
-        "has_key": bool(getenv("HUGGINGFACE_API_KEY", "")),
-        "note": "This just checks the env var exists. It does NOT call the model."
+        "has_hf_key": bool(HF_API_KEY),
+        "model": HF_MODEL,
+        "note": "Only checks env presence, does not call HF."
     }), 200
-# --- Route to create a new user ---
+
+# --- Create user ---
 @app.route("/users", methods=["POST"])
 def fPostUser():
     data = request.json or {}
     sEmail = data.get("email")
     sPassword = data.get("password")
-
     if not sEmail or not sPassword:
         return jsonify({"error": "Missing fields"}), 400
 
@@ -79,13 +75,10 @@ def fPostUser():
     try:
         conn = fGetConnection()
         cur = conn.cursor()
-        cur.execute(
-            """
+        cur.execute("""
             INSERT INTO users (id, email, passwordhash, created_at)
             VALUES (%s, %s, %s, %s)
-            """,
-            (sId, sEmail, sPasswordHash, dtCreatedAt),
-        )
+        """, (sId, sEmail, sPasswordHash, dtCreatedAt))
         conn.commit()
         cur.close()
         conn.close()
@@ -93,13 +86,12 @@ def fPostUser():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- Route to log in a user ---
+# --- Login ---
 @app.route("/login", methods=["POST"])
 def fLogin():
     data = request.json or {}
     sEmail = data.get("email")
     sPassword = data.get("password")
-
     if not sEmail or not sPassword:
         return jsonify({"error": "Missing fields"}), 400
 
@@ -119,7 +111,6 @@ def fLogin():
             return jsonify({"id": sUserId}), 200
         else:
             return jsonify({"error": "Invalid password"}), 401
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -140,19 +131,15 @@ def create_event():
     try:
         conn = fGetConnection()
         cur = conn.cursor()
-        cur.execute(
-            """
+        cur.execute("""
             INSERT INTO events (id, user_id, trigger, compulsion, emotion, notes, timestamp)
             VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s)
             RETURNING id;
-            """,
-            (user_id, trigger, compulsion, emotion, notes, timestamp),
-        )
+        """, (user_id, trigger, compulsion, emotion, notes, timestamp))
         new_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
-
         return jsonify({"id": str(new_id)}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -163,40 +150,32 @@ def fGetAnalytics():
     sUserId = request.args.get("user_id")
     if not sUserId:
         return jsonify({"error": "user_id is required"}), 400
-
     try:
         conn = fGetConnection()
         cur = conn.cursor()
 
-        cur.execute(
-            """
+        cur.execute("""
             SELECT trigger, COUNT(*) AS count
             FROM events
             WHERE user_id = %s
             GROUP BY trigger
             ORDER BY count DESC;
-            """,
-            (sUserId,),
-        )
+        """, (sUserId,))
         trigger_rows = cur.fetchall()
         top_triggers = {row[0]: row[1] for row in trigger_rows}
 
-        cur.execute(
-            """
+        cur.execute("""
             SELECT DATE(timestamp) AS date, COUNT(*) AS count
             FROM events
             WHERE user_id = %s
             GROUP BY DATE(timestamp)
             ORDER BY date ASC;
-            """,
-            (sUserId,),
-        )
+        """, (sUserId,))
         date_rows = cur.fetchall()
         daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
 
         cur.close()
         conn.close()
-
         return jsonify({"topTriggers": top_triggers, "dailyCounts": daily_counts}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -207,20 +186,16 @@ def fExportCSV():
     sUserId = request.args.get("user_id")
     if not sUserId:
         return jsonify({"error": "user_id is required"}), 400
-
     try:
         conn = fGetConnection()
         cur = conn.cursor()
-        cur.execute(
-            """
+        cur.execute("""
             SELECT u.email, e.trigger, e.compulsion, e.emotion, e.notes
             FROM events e
             JOIN users u ON e.user_id = u.id
             WHERE e.user_id = %s
             ORDER BY e.timestamp ASC;
-            """,
-            (sUserId,),
-        )
+        """, (sUserId,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -232,9 +207,7 @@ def fExportCSV():
         writer.writerows(rows)
 
         response = Response(output.getvalue(), mimetype="text/csv")
-        response.headers.set(
-            "Content-Disposition", "attachment", filename=f"events_{sUserId}.csv"
-        )
+        response.headers.set("Content-Disposition", "attachment", filename=f"events_{sUserId}.csv")
         return response
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -249,16 +222,13 @@ def fExportPDF():
     try:
         conn = fGetConnection()
         cur = conn.cursor()
-        cur.execute(
-            """
+        cur.execute("""
             SELECT u.email, e.trigger, e.compulsion, e.emotion, e.notes
             FROM events e
             JOIN users u ON e.user_id = u.id
             WHERE e.user_id = %s
             ORDER BY e.timestamp ASC;
-            """,
-            (sUserId,),
-        )
+        """, (sUserId,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -279,36 +249,29 @@ def fExportPDF():
         data = [colnames] + wrapped_rows
 
         table = Table(data, colWidths=[120, 80, 100, 80, 200], hAlign="LEFT")
-        table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1ABC9C")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 10),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.HexColor("#F7F9FB")]),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ]
-            )
-        )
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1ABC9C")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",   (0, 0), (-1, 0), 10),
+            ("GRID",       (0, 0), (-1, -1), 0.25, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.HexColor("#F7F9FB")]),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
 
-        title = Paragraph(
-            f"<b>OCD Tracker — Events Export</b><br/>User ID: {sUserId}", styles["Title"]
-        )
+        title = Paragraph(f"<b>OCD Tracker — Events Export</b><br/>User ID: {sUserId}", styles["Title"])
         doc.build([title, table])
         buf.seek(0)
-        return send_file(
-            buf, mimetype="application/pdf", as_attachment=True, download_name="events.pdf"
-        )
+        return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name="events.pdf")
     except Exception as e:
         return jsonify({"error": f"PDF error: {e}"}), 500
 
-# --- Debug routes you already had ---
+# --- Debug routes list ---
 @app.route("/debug/routes")
 def debug_routes():
     return jsonify(sorted([str(r) for r in app.url_map.iter_rules()])), 200
 
+# --- Reportlab smoke test ---
 @app.route("/debug/reportlab")
 def debug_reportlab():
     try:
@@ -321,7 +284,7 @@ def debug_reportlab():
     except Exception as e:
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
-# --- Sentiment via HF Inference API (stateless, retry while loading) ---
+# --- Sentiment via HF Inference API ---
 @app.route("/analyze", methods=["POST"])
 def fAnalyze():
     if not HF_API_KEY:
@@ -338,18 +301,18 @@ def fAnalyze():
         "Content-Type": "application/json",
     }
 
-    start = time.monotonic()
     for attempt in range(HF_MAX_ATTEMPTS):
         try:
             r = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
-            if r.status_code in (503, 524, 429):  # loading or rate-limited
+            # Loading / rate limit cases
+            if r.status_code in (503, 524, 429):
                 time.sleep(0.7 * (attempt + 1))
                 continue
             if not r.ok:
                 return jsonify({"error": f"HuggingFace API error {r.status_code}", "body": r.text[:200]}), 502
 
             resp = r.json()
-            # supports [ {label, score}, ... ] or nested [[...]]
+            # Supports [ {label, score}, ... ] or nested [[...]]
             if isinstance(resp, list):
                 inner = resp[0] if resp and isinstance(resp[0], list) else resp
                 if inner and isinstance(inner[0], dict) and "label" in inner[0]:
@@ -362,13 +325,13 @@ def fAnalyze():
             return jsonify({"error": "Unexpected HF response format", "raw": resp}), 502
 
         except requests.Timeout:
+            # try one more time if within attempts
             continue
         except Exception as e:
             return jsonify({"error": f"Analysis failed: {e}"}), 500
 
-    elapsed = time.monotonic() - start
-    return jsonify({"error": f"Model is warming up or rate-limited (waited ~{int(elapsed)}s). Try again."}), 503
+    return jsonify({"error": "Model is warming up or rate-limited. Try again."}), 503
 
 if __name__ == "__main__":
-    # Local dev only; Render uses gunicorn.
+    # Local dev; Render runs via gunicorn
     app.run(host="127.0.0.1", port=5000, debug=True)
