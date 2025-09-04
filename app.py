@@ -11,6 +11,7 @@ from flask import Response
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
 CORS(app)  #Allows frontend (dashboard.html) to access this backend
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 # --- Database connection setup ---
 
