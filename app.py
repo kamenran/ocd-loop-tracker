@@ -5,6 +5,7 @@ import psycopg2
 import uuid
 from datetime import datetime
 import csv
+import os
 import io
 from flask import Response
 app = Flask(__name__)
@@ -12,15 +13,13 @@ bcrypt = Bcrypt(app)
 CORS(app)  #Allows frontend (dashboard.html) to access this backend
 
 # --- Database connection setup ---
-def fGetConnection():
-    return psycopg2.connect(
-        dbname="ocd_tracker",
-        user="postgres",
-        password="Kamboarder1001",	
-        host="localhost",
-        port="5432"
-    )
 
+
+def fGetConnection():
+    conn_str = os.getenv("DATABASE_URL")
+    if not conn_str:
+        raise Exception("DATABASE_URL not set")
+    return psycopg2.connect(conn_str)
 # --- Route to create a new user ---
 @app.route("/users", methods=["POST"])
 def fPostUser():
