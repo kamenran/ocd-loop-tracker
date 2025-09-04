@@ -272,7 +272,27 @@
       };
       try {
         const res = await fetch(api('/events'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (res.ok) { document.getElementById('submitMsg').textContent = "Event logged."; loadAnalytics(); }
+        if (res.ok) { 
+		document.getElementById('submitMsg').textContent = "Event logged.";
+		loadAnalytics(); 
+		// 🔹 Analyze notes sentiment after logging event
+		if (notes.trim()) {
+		  fetch(api('/analyze'), {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ notes })
+		  })
+		  .then(r => r.json())
+		  .then(data => {
+			if (data.label) {
+			  document.getElementById('submitMsg').textContent +=
+				` | Sentiment: ${data.label} (score ${data.score})`;
+			}
+		  })
+		  .catch(err => console.error("Sentiment analysis failed:", err));
+		}
+
+		}
         else { document.getElementById('submitMsg').textContent = "Error logging event."; }
       } catch { document.getElementById('submitMsg').textContent = "Network error."; }
     });
