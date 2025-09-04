@@ -328,18 +328,38 @@ def analyze():
     data = request.get_json(force=True, silent=True) or {}
     notes = (data.get("notes") or "").strip()
     if not notes:
-        return jsonify({"available": False, "reason": "notes required"}), 400
-    # keep payload small
-    notes = notes[:500]
-    result = _hf_sentiment(notes)
-    # Always return a consistent shape
-    if result.get("available"):
-        return jsonify({
-            "available": True,
-            "label": result["label"],
-            "score": round(result["score"], 4),
-            "model": HUGGINGFACE_MODEL
-        }), 200
-    return jsonify({"available": False, "reason": result.get("reason", "unknown")}), 200
+        return jsonify({"error": "notes required"}), 400
+
+    notes = notes[:500]  # safety cap
+    url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+    payload = {"inputs": notes}
+
+    attempt = 0
+    while True:  # keep trying until HF replies
+        attempt += 1
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=30)
+            if r.status_code == 503:
+                # model cold start
+                time.sleep(min(2 * attempt, 10))
+                continue
+            r.raise_for_status()
+            out = r.json()
+            seq = out[0] if (isinstance(out, list) and out and isinstance(out[0], list)) else out
+            if isinstance(seq, list) and seq:
+                best = max(seq, key=lambda x: x.get("score", 0))
+                return jsonify({
+                    "label": best.get("label"),
+                    "score": round(float(best.get("score", 0.0)), 4),
+                    "model": HUGGINGFACE_MODEL,
+                    "attempts": attempt
+                }), 200
+            # if unexpected shape, just retry
+        except Exception as e:
+            # network or timeout → short backoff then retry
+            time.sleep(min(2 * attempt, 10))
+            continue
+
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)

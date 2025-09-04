@@ -98,7 +98,7 @@
         <textarea id="notes"></textarea>
         <button type="submit">Log Event</button>
       </form>
-      <p id="submitMsg" class="msg"></p>
+      <p id="submitMsg" class="msg"aria-live="polite"></p>
     </div>
 
     <!-- CHARTS -->
@@ -258,10 +258,13 @@
       } catch { document.getElementById('loginMsg').textContent = "Network error."; }
     });
 
+// --- EVENT (drop-in replacement) ---
 document.getElementById('eventForm').addEventListener('submit', async function (e) {
   e.preventDefault();
+
   const userId = localStorage.getItem('user_id');
   const msgEl = document.getElementById('submitMsg');
+  const btn = this.querySelector('button[type="submit"]');
   if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
 
   const trigger = document.getElementById('trigger').value;
@@ -275,36 +278,60 @@ document.getElementById('eventForm').addEventListener('submit', async function (
     trigger, compulsion, emotion, notes
   };
 
+  // helper: start/stop animated "Analyzing..." dots
+  let dotsTimer = null;
+  const startDots = (base="Analyzing") => {
+    let n = 0;
+    stopDots();
+    dotsTimer = setInterval(() => {
+      n = (n + 1) % 4;
+      msgEl.textContent = base + ".".repeat(n);
+    }, 400);
+  };
+  const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
+
   try {
+    // Disable submit during work
+    const oldBtnText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Saving…";
     msgEl.textContent = "Saving event…";
+
+    // 1) Save the event
     const res = await fetch(api('/events'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-
     if (!res.ok) {
       msgEl.textContent = "Error logging event.";
+      btn.disabled = false; btn.textContent = oldBtnText;
       return;
     }
 
-    msgEl.textContent = "Event logged.";
-    loadAnalytics(); // refresh charts
+    // 2) If no notes, done (no AI)
+    const notesTrim = (notes || "").trim();
+    if (!notesTrim) {
+      msgEl.textContent = "Event logged.";
+      btn.disabled = false; btn.textContent = oldBtnText;
+      loadAnalytics();
+      return;
+    }
 
-    // If notes exist, analyze them right away (no UI changes)
-    const notesTrimmed = (notes || "").trim();
-    if (!notesTrimmed) return;
+    // 3) Show animated "Analyzing…" while we call /analyze
+    btn.textContent = "Analyzing…";
+    startDots();
 
-    // simple retry loop to handle HF cold starts
     let j = {}, ok = false, err = "";
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 6; attempt++) { // up to ~2–3 backoff cycles
       const r = await fetch(api('/analyze'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: notesTrimmed })
+        body: JSON.stringify({ notes: notesTrim })
       });
       try { j = await r.json(); } catch { j = {}; }
       if (r.ok && (j.available || ("label" in j))) { ok = true; break; }
+
       const reason = (j.reason || "").toLowerCase();
       if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")) {
         await new Promise(s => setTimeout(s, 700 * attempt));
@@ -313,14 +340,22 @@ document.getElementById('eventForm').addEventListener('submit', async function (
       err = j.reason || `HTTP ${r.status}`; break;
     }
 
+    stopDots();
     if (ok) {
       msgEl.textContent = `Event logged. AI: ${j.label} (${Number(j.score ?? 0).toFixed(4)})`;
     } else {
-      msgEl.textContent = `Event logged. AI unavailable (${err || j.reason || "unknown"})`;
-      console.log("Analyze debug:", j);
+      msgEl.textContent = `Event logged. AI still warming up…`;
+      console.log("Analyze debug:", j || err);
     }
+
+    // restore UI
+    btn.disabled = false; btn.textContent = oldBtnText;
+    loadAnalytics();
+
   } catch (e2) {
+    stopDots();
     msgEl.textContent = "Network error.";
+    btn.disabled = false; btn.textContent = "Log Event";
   }
 });
     // Init
