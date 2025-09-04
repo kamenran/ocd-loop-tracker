@@ -99,6 +99,7 @@
         <button type="submit">Log Event</button>
       </form>
       <p id="submitMsg" class="msg"></p>
+      <p id="aiMsg" class="msg"></p>
     </div>
 
     <!-- CHARTS -->
@@ -142,9 +143,9 @@
       document.getElementById('loginMsg').textContent = '';
       document.getElementById('signupMsg').textContent = '';
       document.getElementById('submitMsg').textContent = '';
+      document.getElementById('aiMsg').textContent = '';
     });
 
-    // 🔹 Helper: retry loop for downloads
     async function downloadUntilReady(url, filename, btn) {
       btn.disabled = true;
       const originalText = btn.textContent;
@@ -163,7 +164,7 @@
         } catch (e) {
           console.warn("Retrying after error:", e);
         }
-        await new Promise(r => setTimeout(r, 2000)); // wait 2s
+        await new Promise(r => setTimeout(r, 2000));
       }
       btn.disabled = false;
       btn.textContent = originalText;
@@ -220,7 +221,6 @@
       });
     }
 
-    // --- SIGNUP ---
     document.getElementById('signupForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('signupEmail').value;
@@ -239,7 +239,6 @@
       } catch { document.getElementById('signupMsg').textContent = "Network error."; }
     });
 
-    // --- LOGIN ---
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value;
@@ -258,46 +257,78 @@
       } catch { document.getElementById('loginMsg').textContent = "Network error."; }
     });
 
-    // --- EVENT ---
+    // --- EVENT SUBMIT HANDLER WITH SENTIMENT ---
     document.getElementById('eventForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const userId = localStorage.getItem('user_id');
-      if (!userId) { document.getElementById('submitMsg').textContent = "No user ID found. Please sign up or log in first."; return; }
-      const payload = {
-        user_id: userId, timestamp: new Date().toISOString(),
-        trigger: document.getElementById('trigger').value,
-        compulsion: document.getElementById('compulsion').value,
-        emotion: document.getElementById('emotion').value,
-        notes: document.getElementById('notes').value
-      };
-      try {
-        const res = await fetch(api('/events'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (res.ok) { 
-		document.getElementById('submitMsg').textContent = "Event logged.";
-		loadAnalytics(); 
-		// 🔹 Analyze notes sentiment after logging event
-		if (notes.trim()) {
-		  fetch(api('/analyze'), {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ notes })
-		  })
-		  .then(r => r.json())
-		  .then(data => {
-			if (data.label) {
-			  document.getElementById('submitMsg').textContent +=
-				` | Sentiment: ${data.label} (score ${data.score})`;
-			}
-		  })
-		  .catch(err => console.error("Sentiment analysis failed:", err));
-		}
+      const submitMsg = document.getElementById('submitMsg');
+      const aiMsg = document.getElementById('aiMsg');
 
-		}
-        else { document.getElementById('submitMsg').textContent = "Error logging event."; }
-      } catch { document.getElementById('submitMsg').textContent = "Network error."; }
+      if (!userId) {
+        submitMsg.textContent = "No user ID found. Please sign up or log in first.";
+        return;
+      }
+
+      const trigger = document.getElementById('trigger').value;
+      const compulsion = document.getElementById('compulsion').value;
+      const emotion = document.getElementById('emotion').value;
+      const notes = document.getElementById('notes').value;
+
+      aiMsg.textContent = notes.trim() ? "Analyzing notes..." : "";
+
+      const payload = {
+        user_id: userId,
+        timestamp: new Date().toISOString(),
+        trigger,
+        compulsion,
+        emotion,
+        notes
+      };
+
+      try {
+        const res = await fetch(api('/events'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          submitMsg.textContent = "Event logged.";
+          loadAnalytics();
+
+          if (notes.trim()) {
+            try {
+              const aiRes = await fetch(api('/analyze'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ notes })
+              });
+              if (aiRes.ok) {
+                const data = await aiRes.json();
+                if (data.label) {
+                  aiMsg.textContent = `AI sentiment: ${data.label} (${Math.round(data.score * 100)}%)`;
+                } else {
+                  aiMsg.textContent = "AI analysis unavailable.";
+                }
+              } else {
+                aiMsg.textContent = "AI analysis unavailable.";
+              }
+            } catch {
+              aiMsg.textContent = "AI analysis unavailable.";
+            }
+          } else {
+            aiMsg.textContent = "";
+          }
+        } else {
+          submitMsg.textContent = "Error logging event.";
+          aiMsg.textContent = "";
+        }
+      } catch {
+        submitMsg.textContent = "Network error.";
+        aiMsg.textContent = "";
+      }
     });
 
-    // Init
     reflectAuthUI();
     if (localStorage.getItem('user_id')) loadAnalytics();
   </script>
