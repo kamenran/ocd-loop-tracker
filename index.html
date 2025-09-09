@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8" />
   <title>OCD Tracker Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
@@ -53,6 +55,13 @@
       <p>Your personal dashboard for tracking and reflection</p>
     </header>
 
+    <!-- Backend status banner -->
+    <div id="backendStatus" style="display:none; margin-bottom:12px;">
+      <div style="background:#fff3cd;border:1px solid #ffeeba;color:#856404;padding:10px;border-radius:8px;">
+        <span id="backendStatusText">Contacting server…</span>
+      </div>
+    </div>
+
     <!-- SIGN UP -->
     <div class="card">
       <h2>Sign Up</h2>
@@ -98,7 +107,7 @@
         <textarea id="notes"></textarea>
         <button type="submit">Log Event</button>
       </form>
-      <p id="submitMsg" class="msg"aria-live="polite"></p>
+      <p id="submitMsg" class="msg" aria-live="polite"></p>
     </div>
 
     <!-- CHARTS -->
@@ -115,14 +124,85 @@
   </div>
 
   <script>
-    let triggerChart = null;
-    let dailyChart = null;
-
+    // -------------------------------
+    // Config
+    // -------------------------------
     const API_BASE =
       (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
         ? "http://127.0.0.1:5000"
-        : "https://ocd-loop-tracker.onrender.com";
+        : "https://ocd-loop-tracker.onrender.com"; // change to your Cloud Run URL when you migrate
+
     const api = (path) => `${API_BASE}${path}`;
+
+    // -------------------------------
+    // Backend status / readiness
+    // -------------------------------
+    const $status = document.getElementById('backendStatus');
+    const $statusText = document.getElementById('backendStatusText');
+
+    function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
+      $status.style.display = 'block';
+      $status.firstElementChild.style.color = color;
+      $status.firstElementChild.style.background = bg;
+      $status.firstElementChild.style.borderColor = border;
+      $statusText.textContent = msg;
+    }
+    function hideStatus() { $status.style.display = 'none'; }
+
+    async function ping(path, {timeoutMs=5000} = {}) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
+        return res;
+      } finally { clearTimeout(t); }
+    }
+
+    async function checkBackend() {
+      const t0 = Date.now();
+      showStatus("Contacting server…");
+
+      // Is the container up?
+      let up = false;
+      for (let i=0; i<3; i++) {
+        try {
+          const r = await ping('/healthz', { timeoutMs: 3000 + i*2000 });
+          if (r.ok) { up = true; break; }
+        } catch {}
+      }
+      if (!up) {
+        showStatus("Waking the server… (Render free tier may take ~30–60s)");
+      }
+
+      // Poll readiness (DB etc.)
+      let ready = false;
+      for (let attempt=1; attempt<=30; attempt++) {
+        try {
+          const r = await ping('/readyz', { timeoutMs: 4000 + attempt*300 });
+          if (r.ok) { ready = true; break; }
+        } catch {}
+        const elapsed = Math.round((Date.now() - t0)/1000);
+        if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
+        else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
+        else showStatus(`Almost there (cold start)… (${elapsed}s)`);
+        await new Promise(r => setTimeout(r, Math.min(1000 + attempt*200, 4000)));
+      }
+
+      if (ready) {
+        const total = Math.round((Date.now() - t0)/1000);
+        showStatus(`Server ready in ${total}s`, "#155724", "#d4edda", "#c3e6cb");
+        setTimeout(hideStatus, 2000);
+        if (localStorage.getItem('user_id')) loadAnalytics();
+      } else {
+        showStatus("Still starting… you can sign in and log events while we warm up.", "#0c5460", "#d1ecf1", "#bee5eb");
+      }
+    }
+
+    // -------------------------------
+    // UI state & helpers
+    // -------------------------------
+    let triggerChart = null;
+    let dailyChart = null;
 
     function reflectAuthUI() {
       const uid = localStorage.getItem('user_id');
@@ -144,7 +224,6 @@
       document.getElementById('submitMsg').textContent = '';
     });
 
-    // 🔹 Helper: retry loop for downloads
     async function downloadUntilReady(url, filename, btn) {
       btn.disabled = true;
       const originalText = btn.textContent;
@@ -160,10 +239,8 @@
             a.click();
             break;
           }
-        } catch (e) {
-          console.warn("Retrying after error:", e);
-        }
-        await new Promise(r => setTimeout(r, 2000)); // wait 2s
+        } catch (e) { console.warn("Retrying after error:", e); }
+        await new Promise(r => setTimeout(r, 2000));
       }
       btn.disabled = false;
       btn.textContent = originalText;
@@ -204,14 +281,17 @@
       const counts = data.dailyCounts.map(entry => entry.count);
       const labels = Object.keys(data.topTriggers);
       const values = Object.values(data.topTriggers);
+
       if (triggerChart) triggerChart.destroy();
       if (dailyChart) dailyChart.destroy();
+
       const ctx2 = document.getElementById('dailyChart').getContext('2d');
       dailyChart = new Chart(ctx2, {
         type: 'line',
         data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
+
       const ctx = document.getElementById('triggerChart').getContext('2d');
       triggerChart = new Chart(ctx, {
         type: 'bar',
@@ -258,108 +338,109 @@
       } catch { document.getElementById('loginMsg').textContent = "Network error."; }
     });
 
-// --- EVENT (drop-in replacement) ---
-document.getElementById('eventForm').addEventListener('submit', async function (e) {
-  e.preventDefault();
+    // --- EVENT SUBMIT ---
+    document.getElementById('eventForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const userId = localStorage.getItem('user_id');
+      const msgEl = document.getElementById('submitMsg');
+      const btn = this.querySelector('button[type="submit"]');
+      if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
 
-  const userId = localStorage.getItem('user_id');
-  const msgEl = document.getElementById('submitMsg');
-  const btn = this.querySelector('button[type="submit"]');
-  if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
+      const trigger = document.getElementById('trigger').value;
+      const compulsion = document.getElementById('compulsion').value;
+      const emotion = document.getElementById('emotion').value;
+      const notes = document.getElementById('notes').value;
 
-  const trigger = document.getElementById('trigger').value;
-  const compulsion = document.getElementById('compulsion').value;
-  const emotion = document.getElementById('emotion').value;
-  const notes = document.getElementById('notes').value;
+      const payload = {
+        user_id: userId,
+        timestamp: new Date().toISOString(),
+        trigger, compulsion, emotion, notes
+      };
 
-  const payload = {
-    user_id: userId,
-    timestamp: new Date().toISOString(),
-    trigger, compulsion, emotion, notes
-  };
+      // animated dots during analyze
+      let dotsTimer = null;
+      const startDots = (base="Analyzing") => {
+        let n = 0;
+        stopDots();
+        dotsTimer = setInterval(() => {
+          n = (n + 1) % 4;
+          msgEl.textContent = base + ".".repeat(n);
+        }, 400);
+      };
+      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
 
-  // helper: start/stop animated "Analyzing..." dots
-  let dotsTimer = null;
-  const startDots = (base="Analyzing") => {
-    let n = 0;
-    stopDots();
-    dotsTimer = setInterval(() => {
-      n = (n + 1) % 4;
-      msgEl.textContent = base + ".".repeat(n);
-    }, 400);
-  };
-  const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
+      try {
+        const oldBtnText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Saving…";
+        msgEl.textContent = "Saving event…";
 
-  try {
-    // Disable submit during work
-    const oldBtnText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Saving…";
-    msgEl.textContent = "Saving event…";
+        // Save event
+        const res = await fetch(api('/events'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          msgEl.textContent = "Error logging event.";
+          btn.disabled = false; btn.textContent = oldBtnText;
+          return;
+        }
 
-    // 1) Save the event
-    const res = await fetch(api('/events'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-      msgEl.textContent = "Error logging event.";
-      btn.disabled = false; btn.textContent = oldBtnText;
-      return;
-    }
+        // If no notes, done
+        const notesTrim = (notes || "").trim();
+        if (!notesTrim) {
+          msgEl.textContent = "Event logged.";
+          btn.disabled = false; btn.textContent = oldBtnText;
+          loadAnalytics();
+          return;
+        }
 
-    // 2) If no notes, done (no AI)
-    const notesTrim = (notes || "").trim();
-    if (!notesTrim) {
-      msgEl.textContent = "Event logged.";
-      btn.disabled = false; btn.textContent = oldBtnText;
-      loadAnalytics();
-      return;
-    }
+        // Analyze
+        btn.textContent = "Analyzing…";
+        startDots();
 
-    // 3) Show animated "Analyzing…" while we call /analyze
-    btn.textContent = "Analyzing…";
-    startDots();
+        let j = {}, ok = false, err = "";
+        for (let attempt = 1; attempt <= 6; attempt++) {
+          const r = await fetch(api('/analyze'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes: notesTrim })
+          });
+          try { j = await r.json(); } catch { j = {}; }
+          if (r.ok && (j.available || ("label" in j))) { ok = true; break; }
 
-    let j = {}, ok = false, err = "";
-    for (let attempt = 1; attempt <= 6; attempt++) { // up to ~2–3 backoff cycles
-      const r = await fetch(api('/analyze'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: notesTrim })
-      });
-      try { j = await r.json(); } catch { j = {}; }
-      if (r.ok && (j.available || ("label" in j))) { ok = true; break; }
+          const reason = (j.reason || "").toLowerCase();
+          if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")) {
+            await new Promise(s => setTimeout(s, 700 * attempt));
+            continue;
+          }
+          err = j.reason || `HTTP ${r.status}`; break;
+        }
 
-      const reason = (j.reason || "").toLowerCase();
-      if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")) {
-        await new Promise(s => setTimeout(s, 700 * attempt));
-        continue;
+        stopDots();
+        if (ok) {
+          msgEl.textContent = `Event logged. AI: ${j.label} (${Number(j.score ?? 0).toFixed(4)})`;
+        } else {
+          msgEl.textContent = `Event logged. AI still warming up…`;
+          console.log("Analyze debug:", j || err);
+        }
+
+        btn.disabled = false; btn.textContent = oldBtnText;
+        loadAnalytics();
+
+      } catch (e2) {
+        stopDots();
+        msgEl.textContent = "Network error.";
+        btn.disabled = false; btn.textContent = "Log Event";
       }
-      err = j.reason || `HTTP ${r.status}`; break;
-    }
+    });
 
-    stopDots();
-    if (ok) {
-      msgEl.textContent = `Event logged. AI: ${j.label} (${Number(j.score ?? 0).toFixed(4)})`;
-    } else {
-      msgEl.textContent = `Event logged. AI still warming up…`;
-      console.log("Analyze debug:", j || err);
-    }
-
-    // restore UI
-    btn.disabled = false; btn.textContent = oldBtnText;
-    loadAnalytics();
-
-  } catch (e2) {
-    stopDots();
-    msgEl.textContent = "Network error.";
-    btn.disabled = false; btn.textContent = "Log Event";
-  }
-});
+    // -------------------------------
     // Init
+    // -------------------------------
     reflectAuthUI();
+    checkBackend(); // status banner + optional first analytics load
     if (localStorage.getItem('user_id')) loadAnalytics();
   </script>
 </body>
