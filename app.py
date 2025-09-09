@@ -15,30 +15,27 @@ import os
 import io
 import time
 import requests
+import json
 
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
-# --- HF config ---
+# --- Hugging Face Emotion model (better than sentiment) ---
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HUGGINGFACE_MODEL = os.getenv(
     "HUGGINGFACE_MODEL",
-    "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+    "j-hartmann/emotion-english-distilroberta-base"  # default
 )
-_HF_TIMEOUT = 12
-_HF_RETRIES = 3
 
 # --- DB connection ---
 def fGetConnection():
     conn_str = os.getenv("DATABASE_URL")
     if not conn_str:
         raise Exception("DATABASE_URL not set")
-    # Tip: in Render Postgres, prefer the pooled URL if you hit connection limits
-    # e.g., DATABASE_URL_POOLED
     return psycopg2.connect(conn_str)
 
-# --- Users ---
+# ---------------- Users ----------------
 @app.route("/users", methods=["POST"])
 def fPostUser():
     data = request.json or {}
@@ -89,7 +86,7 @@ def fLogin():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- Events ---
+# ---------------- Events ----------------
 @app.route('/events', methods=['POST'])
 def create_event():
     data = request.get_json() or {}
@@ -119,7 +116,7 @@ def create_event():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# --- Analytics ---
+# ---------------- Analytics ----------------
 @app.route('/analytics', methods=['GET'])
 def fGetAnalytics():
     sUserId = request.args.get('user_id')
@@ -130,6 +127,7 @@ def fGetAnalytics():
         conn = fGetConnection()
         cur = conn.cursor()
 
+        # Top triggers
         cur.execute("""
             SELECT "trigger", COUNT(*) AS count
             FROM events
@@ -140,6 +138,7 @@ def fGetAnalytics():
         trigger_rows = cur.fetchall()
         top_triggers = {row[0]: row[1] for row in trigger_rows}
 
+        # Daily counts
         cur.execute("""
             SELECT DATE(timestamp) AS date, COUNT(*) AS count
             FROM events
@@ -150,12 +149,27 @@ def fGetAnalytics():
         date_rows = cur.fetchall()
         daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
 
+        # NEW: AI emotion distribution
+        cur.execute("""
+            SELECT ai_emotion, COUNT(*) AS c
+            FROM events
+            WHERE user_id = %s AND ai_emotion IS NOT NULL
+            GROUP BY ai_emotion
+            ORDER BY c DESC;
+        """, (sUserId,))
+        ai_rows = cur.fetchall()
+        ai_emotions = {row[0]: row[1] for row in ai_rows}
+
         cur.close(); conn.close()
-        return jsonify({"topTriggers": top_triggers, "dailyCounts": daily_counts}), 200
+        return jsonify({
+            "topTriggers": top_triggers,
+            "dailyCounts": daily_counts,
+            "aiEmotions": ai_emotions,  # for emotion chart
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# --- Exports ---
+# ---------------- Exports ----------------
 @app.route('/export/csv', methods=['GET'])
 def fExportCSV():
     sUserId = request.args.get('user_id')
@@ -165,7 +179,7 @@ def fExportCSV():
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp
+            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp, ai_emotion
             FROM events
             WHERE user_id = %s
             ORDER BY timestamp ASC;
@@ -194,7 +208,7 @@ def fExportPDF():
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp
+            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp, ai_emotion
             FROM events
             WHERE user_id = %s
             ORDER BY timestamp ASC;
@@ -212,10 +226,12 @@ def fExportPDF():
         data = [colnames]
         for r in rows:
             r = list(r)
+            # timestamp -> string
             try:
-                r[-1] = r[-1].strftime("%Y-%m-%d %H:%M")
+                r[6] = r[6].strftime("%Y-%m-%d %H:%M")
             except Exception:
-                r[-1] = str(r[-1]) if r[-1] is not None else ""
+                r[6] = str(r[6]) if r[6] is not None else ""
+            # trim long notes
             if r[5] and len(str(r[5])) > 200:
                 r[5] = str(r[5])[:200] + "..."
             data.append(r)
@@ -246,7 +262,7 @@ def fExportPDF():
     except Exception as e:
         return jsonify({'error': f'PDF error: {e}'}), 500
 
-# --- Health endpoints (for UI banner) ---
+# ---------------- Health ----------------
 @app.route("/healthz", methods=["GET"])
 def fHealth():
     return jsonify({"status": "ok"}), 200
@@ -262,46 +278,90 @@ def fReady():
     except Exception as e:
         return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
 
-# --- Analyze (Hugging Face) ---
+# ---------------- Analyze (Emotion AI) ----------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
+    """
+    Emotion detection for a note. Optionally persists to the event row.
+    Request JSON: { notes: str, event_id?: str }
+    Response JSON: {
+      label: str,
+      score: float,
+      scores: [{label,score}, ...],
+      model: str,
+      attempts: int
+    }
+    """
     data = request.get_json(force=True, silent=True) or {}
     notes = (data.get("notes") or "").strip()
+    event_id = data.get("event_id")
     if not notes:
         return jsonify({"error": "notes required"}), 400
 
     notes = notes[:500]
     url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"} if HUGGINGFACE_API_KEY else {}
     payload = {"inputs": notes}
 
-    max_attempts = 12
+    max_attempts = 8
     attempt = 0
+    out_json = None
+    last_err = None
+
     while attempt < max_attempts:
         attempt += 1
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=30)
+            r = requests.post(url, headers=headers, json=payload, timeout=15)
             if r.status_code == 503:
-                time.sleep(min(2 * attempt, 10))
+                time.sleep(min(1.5 * attempt, 8))
                 continue
             r.raise_for_status()
-            out = r.json()
-            seq = out[0] if (isinstance(out, list) and out and isinstance(out[0], list)) else out
-            if isinstance(seq, list) and seq:
-                best = max(seq, key=lambda x: x.get("score", 0))
-                return jsonify({
-                    "label": best.get("label"),
-                    "score": round(float(best.get("score", 0.0)), 4),
-                    "model": HUGGINGFACE_MODEL,
-                    "attempts": attempt
-                }), 200
-        except Exception:
-            time.sleep(min(2 * attempt, 10))
+            out_json = r.json()
+            break
+        except Exception as e:
+            last_err = e
+            time.sleep(min(1.5 * attempt, 8))
             continue
 
-    return jsonify({"available": False, "reason": "hf_unavailable"}), 503
+    if out_json is None:
+        return jsonify({"available": False, "reason": f"hf_unavailable: {last_err}"}), 503
+
+    # HF may return [[...]] or [...]
+    seq = out_json[0] if (isinstance(out_json, list) and out_json and isinstance(out_json[0], list)) else out_json
+    if not isinstance(seq, list) or not seq:
+        return jsonify({"available": False, "reason": "unexpected_response"}), 502
+
+    scores_sorted = sorted(
+        [{"label": s.get("label"), "score": float(s.get("score", 0.0))} for s in seq if "label" in s],
+        key=lambda x: x["score"],
+        reverse=True
+    )
+    top = scores_sorted[0]
+    resp = {
+        "label": top["label"],
+        "score": round(top["score"], 4),
+        "scores": scores_sorted,
+        "model": HUGGINGFACE_MODEL,
+        "attempts": attempt
+    }
+
+    # Persist to the event row if provided
+    if event_id:
+        try:
+            conn = fGetConnection()
+            cur = conn.cursor()
+            cur.execute(
+                'UPDATE events SET ai_emotion = %s, ai_emotion_scores = %s WHERE id = %s',
+                (top["label"], json.dumps(scores_sorted), event_id)
+            )
+            conn.commit()
+            cur.close(); conn.close()
+        except Exception as e:
+            resp["persist_warning"] = f"Could not save ai_emotion: {e}"
+
+    return jsonify(resp), 200
+
 
 if __name__ == "__main__":
-    # Render expects the app to bind to $PORT
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False)
