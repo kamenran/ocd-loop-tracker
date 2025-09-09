@@ -122,326 +122,346 @@
       <p>OCD Tracker 2025 • Built by Kamran Eisenberg</p>
     </footer>
   </div>
+<script>
+  // -------------------------------
+  // Config
+  // -------------------------------
+  const API_BASE =
+    (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
+      ? "http://127.0.0.1:5000"
+      : "https://ocd-loop-tracker.onrender.com"; // change to your Cloud Run URL when you migrate
 
-  <script>
-    // -------------------------------
-    // Config
-    // -------------------------------
-    const API_BASE =
-      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-        ? "http://127.0.0.1:5000"
-        : "https://ocd-loop-tracker.onrender.com"; // change to your Cloud Run URL when you migrate
+  const api = (path) => `${API_BASE}${path}`;
 
-    const api = (path) => `${API_BASE}${path}`;
+  // -------------------------------
+  // Backend status / readiness
+  // -------------------------------
+  const $status = document.getElementById('backendStatus');
+  const $statusText = document.getElementById('backendStatusText');
 
-    // -------------------------------
-    // Backend status / readiness
-    // -------------------------------
-    const $status = document.getElementById('backendStatus');
-    const $statusText = document.getElementById('backendStatusText');
+  function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
+    $status.style.display = 'block';
+    $status.firstElementChild.style.color = color;
+    $status.firstElementChild.style.background = bg;
+    $status.firstElementChild.style.borderColor = border;
+    $statusText.textContent = msg;
+  }
+  function hideStatus() { $status.style.display = 'none'; }
 
-    function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
-      $status.style.display = 'block';
-      $status.firstElementChild.style.color = color;
-      $status.firstElementChild.style.background = bg;
-      $status.firstElementChild.style.borderColor = border;
-      $statusText.textContent = msg;
-    }
-    function hideStatus() { $status.style.display = 'none'; }
+  let BACKEND_READY = false;
+  let readyPoll = null;
 
-    async function ping(path, {timeoutMs=5000} = {}) {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  function markBackendReady() {
+    if (BACKEND_READY) return;
+    BACKEND_READY = true;
+    if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
+    showStatus("Server ready", "#155724", "#d4edda", "#c3e6cb");
+    setTimeout(hideStatus, 1200);
+  }
+
+  // Wrap fetch so ANY successful API call hides the banner
+  async function apiFetch(path, opts = {}) {
+    const res = await fetch(`${API_BASE}${path}`, opts);
+    if (res.ok) markBackendReady();
+    return res;
+  }
+
+  async function ping(path, { timeoutMs = 5000 } = {}) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
+      return res;
+    } finally { clearTimeout(t); }
+  }
+
+  async function checkBackend() {
+    const t0 = Date.now();
+    showStatus("Contacting server…");
+
+    // Is the container up?
+    let up = false;
+    for (let i = 0; i < 3; i++) {
       try {
-        const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
-        return res;
-      } finally { clearTimeout(t); }
+        const r = await ping('/healthz', { timeoutMs: 3000 + i * 2000 });
+        if (r.ok) { up = true; break; }
+      } catch {}
+    }
+    if (!up) {
+      showStatus("Waking the server… (Render free tier may take ~30–60s)");
     }
 
-    async function checkBackend() {
-      const t0 = Date.now();
-      showStatus("Contacting server…");
+    // Start polling /readyz until ready (and stop if any other call marks ready)
+    readyPoll = setInterval(async () => {
+      if (BACKEND_READY) { clearInterval(readyPoll); readyPoll = null; return; }
+      try {
+        const r = await ping('/readyz', { timeoutMs: 5000 });
+        if (r.ok) {
+          const total = Math.round((Date.now() - t0) / 1000);
+          showStatus(`Server ready in ${total}s`, "#155724", "#d4edda", "#c3e6cb");
+          setTimeout(markBackendReady, 200);
+          return;
+        }
+      } catch {}
+      const elapsed = Math.round((Date.now() - t0) / 1000);
+      if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
+      else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
+      else showStatus(`Almost there (cold start)… (${elapsed}s)`);
+    }, 2500);
+  }
 
-      // Is the container up?
-      let up = false;
-      for (let i=0; i<3; i++) {
-        try {
-          const r = await ping('/healthz', { timeoutMs: 3000 + i*2000 });
-          if (r.ok) { up = true; break; }
-        } catch {}
-      }
-      if (!up) {
-        showStatus("Waking the server… (Render free tier may take ~30–60s)");
-      }
+  // -------------------------------
+  // UI state & helpers
+  // -------------------------------
+  let triggerChart = null;
+  let dailyChart = null;
 
-      // Poll readiness (DB etc.)
-      let ready = false;
-      for (let attempt=1; attempt<=30; attempt++) {
-        try {
-          const r = await ping('/readyz', { timeoutMs: 4000 + attempt*300 });
-          if (r.ok) { ready = true; break; }
-        } catch {}
-        const elapsed = Math.round((Date.now() - t0)/1000);
-        if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
-        else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
-        else showStatus(`Almost there (cold start)… (${elapsed}s)`);
-        await new Promise(r => setTimeout(r, Math.min(1000 + attempt*200, 4000)));
-      }
+  function reflectAuthUI() {
+    const uid = localStorage.getItem('user_id');
+    const authed = !!uid;
+    document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
+    document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
+    document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
+    document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
+    document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
+    document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
+    if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+  }
 
-      if (ready) {
-        const total = Math.round((Date.now() - t0)/1000);
-        showStatus(`Server ready in ${total}s`, "#155724", "#d4edda", "#c3e6cb");
-        setTimeout(hideStatus, 2000);
-        if (localStorage.getItem('user_id')) loadAnalytics();
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    localStorage.removeItem('user_id');
+    reflectAuthUI();
+    document.getElementById('loginMsg').textContent = '';
+    document.getElementById('signupMsg').textContent = '';
+    document.getElementById('submitMsg').textContent = '';
+  });
+
+  // Download helpers — now call apiFetch so success hides banner
+  async function downloadUntilReady(path, filename, btn) {
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Loading...";
+    while (true) {
+      try {
+        const res = await apiFetch(path);
+        if (res.ok) {
+          const blob = await res.blob();
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          a.click();
+          break;
+        }
+      } catch (e) { console.warn("Retrying after error:", e); }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+
+  document.getElementById('downloadCsvBtn').addEventListener('click', () => {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) { alert("Please log in first."); return; }
+    downloadUntilReady(`/export/csv?user_id=${encodeURIComponent(userId)}`, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
+  });
+
+  document.getElementById('downloadPdfBtn').addEventListener('click', () => {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) { alert("Please log in first."); return; }
+    downloadUntilReady(`/export/pdf?user_id=${encodeURIComponent(userId)}`, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
+  });
+
+  function loadAnalytics() {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) {
+      document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+      return;
+    }
+    apiFetch(`/analytics?user_id=${encodeURIComponent(userId)}`)
+      .then(r => r.json())
+      .then(data => renderDashboard(data))
+      .catch(err => {
+        console.error(err);
+        document.getElementById('data-output').textContent = 'Error loading data';
+      });
+  }
+
+  function renderDashboard(data) {
+    document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
+    const dates = data.dailyCounts.map(entry => entry.date);
+    const counts = data.dailyCounts.map(entry => entry.count);
+    const labels = Object.keys(data.topTriggers);
+    const values = Object.values(data.topTriggers);
+
+    if (triggerChart) triggerChart.destroy();
+    if (dailyChart) dailyChart.destroy();
+
+    const ctx2 = document.getElementById('dailyChart').getContext('2d');
+    dailyChart = new Chart(ctx2, {
+      type: 'line',
+      data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    const ctx = document.getElementById('triggerChart').getContext('2d');
+    triggerChart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+  }
+
+  // --- SIGNUP ---
+  document.getElementById('signupForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const email = document.getElementById('signupEmail').value;
+    const password = document.getElementById('signupPassword').value;
+    const payload = { email, password };
+    try {
+      const res = await apiFetch('/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        localStorage.setItem('user_id', data.id);
+        document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
+        reflectAuthUI(); loadAnalytics();
       } else {
-        showStatus("Still starting… you can sign in and log events while we warm up.", "#0c5460", "#d1ecf1", "#bee5eb");
+        document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
       }
-    }
+    } catch { document.getElementById('signupMsg').textContent = "Network error."; }
+  });
 
-    // -------------------------------
-    // UI state & helpers
-    // -------------------------------
-    let triggerChart = null;
-    let dailyChart = null;
+  // --- LOGIN ---
+  document.getElementById('loginForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
+    const payload = { email, password };
+    try {
+      const res = await apiFetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        localStorage.setItem('user_id', data.id);
+        document.getElementById('loginMsg').textContent = "Login successful!";
+        reflectAuthUI(); loadAnalytics();
+      } else {
+        document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
+      }
+    } catch { document.getElementById('loginMsg').textContent = "Network error."; }
+  });
 
-    function reflectAuthUI() {
-      const uid = localStorage.getItem('user_id');
-      const authed = !!uid;
-      document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
-      document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-      if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-    }
+  // --- EVENT SUBMIT ---
+  document.getElementById('eventForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const userId = localStorage.getItem('user_id');
+    const msgEl = document.getElementById('submitMsg');
+    const btn = this.querySelector('button[type="submit"]');
+    if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
 
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      localStorage.removeItem('user_id');
-      reflectAuthUI();
-      document.getElementById('loginMsg').textContent = '';
-      document.getElementById('signupMsg').textContent = '';
-      document.getElementById('submitMsg').textContent = '';
-    });
+    const trigger = document.getElementById('trigger').value;
+    const compulsion = document.getElementById('compulsion').value;
+    const emotion = document.getElementById('emotion').value;
+    const notes = document.getElementById('notes').value;
 
-    async function downloadUntilReady(url, filename, btn) {
+    const payload = {
+      user_id: userId,
+      timestamp: new Date().toISOString(),
+      trigger, compulsion, emotion, notes
+    };
+
+    // animated dots during analyze
+    let dotsTimer = null;
+    const startDots = (base="Analyzing") => {
+      let n = 0;
+      stopDots();
+      dotsTimer = setInterval(() => {
+        n = (n + 1) % 4;
+        msgEl.textContent = base + ".".repeat(n);
+      }, 400);
+    };
+    const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
+
+    try {
+      const oldBtnText = btn.textContent;
       btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = "Loading...";
-      while (true) {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const blob = await res.blob();
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            a.click();
-            break;
-          }
-        } catch (e) { console.warn("Retrying after error:", e); }
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      btn.disabled = false;
-      btn.textContent = originalText;
-    }
+      btn.textContent = "Saving…";
+      msgEl.textContent = "Saving event…";
 
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      const url = api(`/export/csv?user_id=${encodeURIComponent(userId)}`);
-      downloadUntilReady(url, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
-    });
-
-    document.getElementById('downloadPdfBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      const url = api(`/export/pdf?user_id=${encodeURIComponent(userId)}`);
-      downloadUntilReady(url, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
-    });
-
-    function loadAnalytics() {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) {
-        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+      // Save event
+      const res = await apiFetch('/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        msgEl.textContent = "Error logging event.";
+        btn.disabled = false; btn.textContent = oldBtnText;
         return;
       }
-      fetch(api(`/analytics?user_id=${encodeURIComponent(userId)}`))
-        .then(r => r.json())
-        .then(data => renderDashboard(data))
-        .catch(err => {
-          console.error(err);
-          document.getElementById('data-output').textContent = 'Error loading data';
-        });
-    }
 
-    function renderDashboard(data) {
-      document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
-      const dates = data.dailyCounts.map(entry => entry.date);
-      const counts = data.dailyCounts.map(entry => entry.count);
-      const labels = Object.keys(data.topTriggers);
-      const values = Object.values(data.topTriggers);
-
-      if (triggerChart) triggerChart.destroy();
-      if (dailyChart) dailyChart.destroy();
-
-      const ctx2 = document.getElementById('dailyChart').getContext('2d');
-      dailyChart = new Chart(ctx2, {
-        type: 'line',
-        data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-
-      const ctx = document.getElementById('triggerChart').getContext('2d');
-      triggerChart = new Chart(ctx, {
-        type: 'bar',
-        data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-    }
-
-    // --- SIGNUP ---
-    document.getElementById('signupForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const email = document.getElementById('signupEmail').value;
-      const password = document.getElementById('signupPassword').value;
-      const payload = { email, password };
-      try {
-        const res = await fetch(api('/users'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch { document.getElementById('signupMsg').textContent = "Network error."; }
-    });
-
-    // --- LOGIN ---
-    document.getElementById('loginForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const email = document.getElementById('loginEmail').value;
-      const password = document.getElementById('loginPassword').value;
-      const payload = { email, password };
-      try {
-        const res = await fetch(api('/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('loginMsg').textContent = "Login successful!";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch { document.getElementById('loginMsg').textContent = "Network error."; }
-    });
-
-    // --- EVENT SUBMIT ---
-    document.getElementById('eventForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const userId = localStorage.getItem('user_id');
-      const msgEl = document.getElementById('submitMsg');
-      const btn = this.querySelector('button[type="submit"]');
-      if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
-
-      const trigger = document.getElementById('trigger').value;
-      const compulsion = document.getElementById('compulsion').value;
-      const emotion = document.getElementById('emotion').value;
-      const notes = document.getElementById('notes').value;
-
-      const payload = {
-        user_id: userId,
-        timestamp: new Date().toISOString(),
-        trigger, compulsion, emotion, notes
-      };
-
-      // animated dots during analyze
-      let dotsTimer = null;
-      const startDots = (base="Analyzing") => {
-        let n = 0;
-        stopDots();
-        dotsTimer = setInterval(() => {
-          n = (n + 1) % 4;
-          msgEl.textContent = base + ".".repeat(n);
-        }, 400);
-      };
-      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
-
-      try {
-        const oldBtnText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Saving…";
-        msgEl.textContent = "Saving event…";
-
-        // Save event
-        const res = await fetch(api('/events'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) {
-          msgEl.textContent = "Error logging event.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          return;
-        }
-
-        // If no notes, done
-        const notesTrim = (notes || "").trim();
-        if (!notesTrim) {
-          msgEl.textContent = "Event logged.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          loadAnalytics();
-          return;
-        }
-
-        // Analyze
-        btn.textContent = "Analyzing…";
-        startDots();
-
-        let j = {}, ok = false, err = "";
-        for (let attempt = 1; attempt <= 6; attempt++) {
-          const r = await fetch(api('/analyze'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ notes: notesTrim })
-          });
-          try { j = await r.json(); } catch { j = {}; }
-          if (r.ok && (j.available || ("label" in j))) { ok = true; break; }
-
-          const reason = (j.reason || "").toLowerCase();
-          if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")) {
-            await new Promise(s => setTimeout(s, 700 * attempt));
-            continue;
-          }
-          err = j.reason || `HTTP ${r.status}`; break;
-        }
-
-        stopDots();
-        if (ok) {
-          msgEl.textContent = `Event logged. AI: ${j.label} (${Number(j.score ?? 0).toFixed(4)})`;
-        } else {
-          msgEl.textContent = `Event logged. AI still warming up…`;
-          console.log("Analyze debug:", j || err);
-        }
-
+      // If no notes, done
+      const notesTrim = (notes || "").trim();
+      if (!notesTrim) {
+        msgEl.textContent = "Event logged.";
         btn.disabled = false; btn.textContent = oldBtnText;
         loadAnalytics();
-
-      } catch (e2) {
-        stopDots();
-        msgEl.textContent = "Network error.";
-        btn.disabled = false; btn.textContent = "Log Event";
+        return;
       }
-    });
 
-    // -------------------------------
-    // Init
-    // -------------------------------
-    reflectAuthUI();
-    checkBackend(); // status banner + optional first analytics load
-    if (localStorage.getItem('user_id')) loadAnalytics();
-  </script>
+      // Analyze
+      btn.textContent = "Analyzing…";
+      startDots();
+
+      let j = {}, ok = false, err = "";
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        const r = await apiFetch('/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: notesTrim })
+        });
+        try { j = await r.json(); } catch { j = {}; }
+        if (r.ok && (j.available || ("label" in j))) { ok = true; break; }
+
+        const reason = (j.reason || "").toLowerCase();
+        if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")) {
+          await new Promise(s => setTimeout(s, 700 * attempt));
+          continue;
+        }
+        err = j.reason || `HTTP ${r.status}`; break;
+      }
+
+      stopDots();
+      if (ok) {
+        msgEl.textContent = `Event logged. AI: ${j.label} (${Number(j.score ?? 0).toFixed(4)})`;
+      } else {
+        msgEl.textContent = `Event logged. AI still warming up…`;
+        console.log("Analyze debug:", j || err);
+      }
+
+      btn.disabled = false; btn.textContent = oldBtnText;
+      loadAnalytics();
+
+    } catch (e2) {
+      stopDots();
+      msgEl.textContent = "Network error.";
+      btn.disabled = false; btn.textContent = "Log Event";
+    }
+  });
+
+  // -------------------------------
+  // Init
+  // -------------------------------
+  reflectAuthUI();
+  checkBackend(); // status banner + readiness polling
+  if (localStorage.getItem('user_id')) loadAnalytics();
+</script>
+
 </body>
 </html>
