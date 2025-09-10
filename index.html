@@ -1,458 +1,458 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>OCD Tracker Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
+  <title>OCD Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <style>
-    body { font-family: 'Segoe UI', Roboto, sans-serif; background: #f9fafc; color: #2C3E50; line-height: 1.5; margin: 0; padding: 20px; }
-    .container { max-width: 900px; margin: auto; }
-    header { text-align: center; margin-bottom: 30px; }
-    h1 { color: #1ABC9C; margin-bottom: 8px; }
-    h2 { color: #34495E; margin-top: 0; }
-    .card { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-    label { display: block; margin: 10px 0 5px; font-weight: 500; }
-    input, textarea, button { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; }
-    textarea { resize: vertical; }
-    button { background: #1ABC9C; color: white; border: none; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-    button:hover { background: #16a085; }
-    button:disabled { background: #95a5a6; cursor: not-allowed; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-    p.msg { font-size: 14px; margin-top: -8px; margin-bottom: 10px; }
-    footer { text-align: center; font-size: 13px; color: #7f8c8d; margin-top: 30px; }
-    @media (max-width: 600px) { body { padding: 15px; } .actions { flex-direction: column; } }
+    body{font-family:Segoe UI,Roboto,sans-serif;background:#f9fafc;color:#2C3E50;line-height:1.5;margin:0;padding:20px}
+    .container{max-width:900px;margin:auto}
+    header{text-align:center;margin-bottom:30px}
+    h1{color:#1ABC9C;margin-bottom:8px}
+    h2{color:#34495E;margin-top:0}
+    .card{background:#fff;border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 2px 6px rgba(0,0,0,.08)}
+    label{display:block;margin:10px 0 5px;font-weight:500}
+    input,textarea,button{width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:12px;box-sizing:border-box}
+    textarea{resize:vertical}
+    button{background:#1ABC9C;color:#fff;border:none;font-weight:bold;cursor:pointer;transition:background .2s}
+    button:hover{background:#16a085}
+    button:disabled{background:#95a5a6;cursor:not-allowed}
+    .actions{display:flex;gap:10px;flex-wrap:wrap}
+    p.msg{font-size:14px;margin-top:-8px;margin-bottom:10px}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .pill{padding:6px 10px;border:1px solid #ddd;border-radius:999px;background:#fff}
+    @media (max-width:600px){body{padding:15px}.actions{flex-direction:column}}
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>OCD Tracker</h1>
-      <p>Your personal dashboard for tracking and reflection</p>
-    </header>
+<div class="container">
+  <header>
+    <h1>OCD Tracker</h1>
+    <p>Your personal dashboard for tracking and reflection</p>
+  </header>
 
-    <!-- Backend status banner -->
-    <div id="backendStatus" style="display:none; margin-bottom:12px;">
-      <div style="background:#fff3cd;border:1px solid #ffeeba;color:#856404;padding:10px;border-radius:8px;">
-        <span id="backendStatusText">Contacting server…</span>
-      </div>
+  <!-- Mode + Backend status -->
+  <div class="row" style="margin-bottom:12px">
+    <div class="pill">
+      Storage:
+      <label><input type="radio" name="mode" value="local" checked> Local</label>
+      <label><input type="radio" name="mode" value="cloud"> Cloud</label>
     </div>
-
-    <!-- SIGN UP -->
-    <div class="card">
-      <h2>Sign Up</h2>
-      <form id="signupForm">
-        <label>Email:</label>
-        <input type="text" id="signupEmail" required>
-        <label>Password:</label>
-        <input type="password" id="signupPassword" required>
-        <button type="submit">Create Account</button>
-      </form>
-      <p id="signupMsg" class="msg"></p>
-    </div>
-
-    <!-- LOGIN -->
-    <div class="card">
-      <h2>Log In</h2>
-      <form id="loginForm">
-        <label>Email:</label>
-        <input type="text" id="loginEmail" required>
-        <label>Password:</label>
-        <input type="password" id="loginPassword" required>
-        <button type="submit">Log In</button>
-      </form>
-      <p id="loginMsg" class="msg"></p>
-      <div class="actions">
-        <button id="logoutBtn" style="display:none;">Log out</button>
-        <button id="downloadCsvBtn" style="display:none;">Download CSV</button>
-        <button id="downloadPdfBtn" style="display:none;">Download PDF</button>
-      </div>
-    </div>
-
-    <!-- EVENT FORM -->
-    <div class="card">
-      <h2>Log a New Event</h2>
-      <form id="eventForm">
-        <label>Trigger:</label>
-        <input type="text" id="trigger" required>
-        <label>Compulsion:</label>
-        <input type="text" id="compulsion">
-        <label>Emotion (optional):</label>
-        <input type="text" id="emotion">
-        <label>Notes:</label>
-        <textarea id="notes"></textarea>
-        <button type="submit">Log Event</button>
-      </form>
-      <p id="submitMsg" class="msg" aria-live="polite"></p>
-    </div>
-
-    <!-- CHARTS -->
-    <div class="card">
-      <h2>Analytics</h2>
-      <canvas id="triggerChart" height="300"></canvas>
-      <canvas id="dailyChart" height="300"></canvas>
-      <!-- NEW: Emotion chart -->
-      <canvas id="emotionChart" height="300"></canvas>
-      <pre id="data-output">Loading...</pre>
-    </div>
-
-    <footer>
-      <p>OCD Tracker 2025 • Built by Kamran Eisenberg</p>
-    </footer>
+    <div id="backendStatus" class="pill" style="display:none;color:#856404;background:#fff3cd;border-color:#ffeeba">Contacting server…</div>
   </div>
 
-  <script>
-    // -------------------------------
-    // Config
-    // -------------------------------
-    const API_BASE =
-      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-        ? "http://127.0.0.1:5000"
-        : "https://ocd-loop-tracker.onrender.com";
+  <div class="card">
+    <h2>Sign Up</h2>
+    <form id="signupForm">
+      <label>Email:</label>
+      <input type="text" id="signupEmail" required>
+      <label>Password:</label>
+      <input type="password" id="signupPassword" required>
+      <button type="submit">Create Account</button>
+    </form>
+    <p id="signupMsg" class="msg"></p>
+  </div>
 
-    const api = (path) => `${API_BASE}${path}`;
+  <div class="card">
+    <h2>Log In</h2>
+    <form id="loginForm">
+      <label>Email:</label>
+      <input type="text" id="loginEmail" required>
+      <label>Password:</label>
+      <input type="password" id="loginPassword" required>
+      <button type="submit">Log In</button>
+    </form>
+    <p id="loginMsg" class="msg"></p>
+    <div class="actions">
+      <button id="logoutBtn" style="display:none;">Log out</button>
+      <button id="downloadCsvBtn" style="display:none;">Download CSV</button>
+      <button id="downloadPdfBtn" style="display:none;">Download PDF</button>
+    </div>
+  </div>
 
-    // -------------------------------
-    // Backend status / readiness
-    // -------------------------------
-    const $status = document.getElementById('backendStatus');
-    const $statusText = document.getElementById('backendStatusText');
+  <div class="card">
+    <h2>Log a New Event</h2>
+    <form id="eventForm">
+      <label>Trigger:</label>
+      <input type="text" id="trigger" required>
+      <label>Compulsion:</label>
+      <input type="text" id="compulsion">
+      <label>Emotion (optional):</label>
+      <input type="text" id="emotion">
+      <label>Notes:</label>
+      <textarea id="notes"></textarea>
+      <button type="submit">Log Event</button>
+    </form>
+    <p id="submitMsg" class="msg" aria-live="polite"></p>
+  </div>
 
-    function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
-      $status.style.display = 'block';
-      $status.firstElementChild.style.color = color;
-      $status.firstElementChild.style.background = bg;
-      $status.firstElementChild.style.borderColor = border;
-      $statusText.textContent = msg;
-    }
-    function hideStatus() { $status.style.display = 'none'; }
+  <div class="card">
+    <h2>Analytics</h2>
+    <canvas id="triggerChart" height="300"></canvas>
+    <canvas id="dailyChart" height="300"></canvas>
+    <canvas id="emotionChart" height="300"></canvas>
+    <pre id="data-output">Loading...</pre>
+  </div>
 
-    let BACKEND_READY = false;
-    let readyPoll = null;
+  <footer><p>OCD Tracker • Built by Kamran Eisenberg</p></footer>
+</div>
 
-    function markBackendReady() {
-      if (BACKEND_READY) return;
-      BACKEND_READY = true;
-      if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
-      showStatus("Server ready", "#155724", "#d4edda", "#c3e6cb");
-      setTimeout(hideStatus, 1200);
-    }
+<script>
+  // ---------------- Config
+  const CLOUD_API_BASE = "https://ocd-tracker.ocdapp.workers.dev"; // <-- set this to your Worker URL
+  const $status = document.getElementById('backendStatus');
 
-    // Wrap fetch so ANY successful API call hides the banner
-    async function apiFetch(path, opts = {}) {
-      const res = await fetch(`${API_BASE}${path}`, opts);
-      if (res.ok) markBackendReady();
-      return res;
-    }
-
-    async function ping(path, { timeoutMs = 5000 } = {}) {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
-        return res;
-      } finally { clearTimeout(t); }
-    }
-
-    async function checkBackend() {
-      const t0 = Date.now();
-      showStatus("Contacting server…");
-
-      // Is the container up?
-      let up = false;
-      for (let i = 0; i < 3; i++) {
-        try {
-          const r = await ping('/healthz', { timeoutMs: 3000 + i * 2000 });
-          if (r.ok) { up = true; break; }
-        } catch {}
-      }
-      if (!up) showStatus("Waking the server… (Render free tier may take ~30–60s)");
-
-      // Poll /readyz until ready (stop if any other call marks ready)
-      readyPoll = setInterval(async () => {
-        if (BACKEND_READY) { clearInterval(readyPoll); readyPoll = null; return; }
-        try {
-          const r = await ping('/readyz', { timeoutMs: 5000 });
-          if (r.ok) {
-            const total = Math.round((Date.now() - t0) / 1000);
-            showStatus(`Server ready in ${total}s`, "#155724", "#d4edda", "#c3e6cb");
-            setTimeout(markBackendReady, 200);
-            return;
-          }
-        } catch {}
-        const elapsed = Math.round((Date.now() - t0) / 1000);
-        if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
-        else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
-        else showStatus(`Almost there (cold start)… (${elapsed}s)`);
-      }, 2500);
-    }
-
-    // -------------------------------
-    // UI state & helpers
-    // -------------------------------
-    let triggerChart = null;
-    let dailyChart = null;
-    let emotionChart = null;
-
-    function reflectAuthUI() {
-      const uid = localStorage.getItem('user_id');
-      const authed = !!uid;
-      document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
-      document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-      if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-    }
-
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      localStorage.removeItem('user_id');
+  function getMode(){ return (document.querySelector('input[name="mode"]:checked')?.value)||"local"; }
+  document.querySelectorAll('input[name="mode"]').forEach(r=>{
+    r.addEventListener('change', ()=>{
       reflectAuthUI();
-      document.getElementById('loginMsg').textContent = '';
-      document.getElementById('signupMsg').textContent = '';
-      document.getElementById('submitMsg').textContent = '';
+      loadAnalytics();
+      if (getMode()==="cloud") checkBackend(); else $status.style.display='none';
     });
+  });
 
-    async function downloadUntilReady(path, filename, btn) {
-      btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = "Loading...";
-      while (true) {
-        try {
-          const res = await apiFetch(path);
-          if (res.ok) {
-            const blob = await res.blob();
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            a.click();
-            break;
-          }
-        } catch (e) { console.warn("Retrying after error:", e); }
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      btn.disabled = false;
-      btn.textContent = originalText;
-    }
+  // ---------------- Backend status (Cloud mode)
+  async function checkBackend(){
+    $status.style.display='block'; $status.textContent="Contacting server…";
+    try {
+      const r = await fetch(`${CLOUD_API_BASE}/readyz`, { cache: 'no-store' });
+      if (r.ok) { $status.style.color="#155724"; $status.style.background="#d4edda"; $status.textContent="Server ready"; setTimeout(()=> $status.style.display='none', 1200); }
+      else { $status.textContent="Starting…"; }
+    } catch { $status.textContent="Starting…"; }
+  }
 
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      downloadUntilReady(`/export/csv?user_id=${encodeURIComponent(userId)}`, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
-    });
+  // ---------------- Charts & UI state
+  let triggerChart=null, dailyChart=null, emotionChart=null;
 
-    document.getElementById('downloadPdfBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      downloadUntilReady(`/export/pdf?user_id=${encodeURIComponent(userId)}`, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
-    });
+  function reflectAuthUI() {
+    const uid = localStorage.getItem('user_id');
+    const authed = !!uid;
+    document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
+    document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
+    document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
+    document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
+    document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
+    document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
+    if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+  }
 
-    function loadAnalytics() {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) {
-        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-        return;
-      }
-      apiFetch(`/analytics?user_id=${encodeURIComponent(userId)}`)
-        .then(r => r.json())
-        .then(data => renderDashboard(data))
-        .catch(err => {
-          console.error(err);
-          document.getElementById('data-output').textContent = 'Error loading data';
-        });
-    }
-
-    function renderDashboard(data) {
-      document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
-      const dates = data.dailyCounts.map(entry => entry.date);
-      const counts = data.dailyCounts.map(entry => entry.count);
-      const labels = Object.keys(data.topTriggers);
-      const values = Object.values(data.topTriggers);
-
-      if (triggerChart) triggerChart.destroy();
-      if (dailyChart) dailyChart.destroy();
-      if (emotionChart) emotionChart.destroy();
-
-      const ctx2 = document.getElementById('dailyChart').getContext('2d');
-      dailyChart = new Chart(ctx2, {
-        type: 'line',
-        data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-
-      const ctx = document.getElementById('triggerChart').getContext('2d');
-      triggerChart = new Chart(ctx, {
-        type: 'bar',
-        data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-
-      // NEW: Emotion bar chart (AI)
-      if (data.aiEmotions) {
-        const emoLabels = Object.keys(data.aiEmotions);
-        const emoValues = Object.values(data.aiEmotions);
-        const ectx = document.getElementById('emotionChart').getContext('2d');
-        emotionChart = new Chart(ectx, {
-          type: 'bar',
-          data: { labels: emoLabels, datasets: [{ label: 'AI Emotions', data: emoValues, backgroundColor: 'rgba(255,159,64,0.7)' }] },
-          options: { responsive: true, scales: { y: { beginAtZero: true } } }
-        });
-      }
-    }
-
-    // --- SIGNUP ---
-    document.getElementById('signupForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const email = document.getElementById('signupEmail').value;
-      const password = document.getElementById('signupPassword').value;
-      const payload = { email, password };
-      try {
-        const res = await apiFetch('/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch { document.getElementById('signupMsg').textContent = "Network error."; }
-    });
-
-    // --- LOGIN ---
-    document.getElementById('loginForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const email = document.getElementById('loginEmail').value;
-      const password = document.getElementById('loginPassword').value;
-      const payload = { email, password };
-      try {
-        const res = await apiFetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('loginMsg').textContent = "Login successful!";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch { document.getElementById('loginMsg').textContent = "Network error."; }
-    });
-
-    // --- EVENT SUBMIT (Emotion AI) ---
-    document.getElementById('eventForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const userId = localStorage.getItem('user_id');
-      const msgEl = document.getElementById('submitMsg');
-      const btn = this.querySelector('button[type="submit"]');
-      if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
-
-      const trigger = document.getElementById('trigger').value;
-      const compulsion = document.getElementById('compulsion').value;
-      const emotion = document.getElementById('emotion').value;
-      const notes = document.getElementById('notes').value;
-
-      const payload = {
-        user_id: userId,
-        timestamp: new Date().toISOString(),
-        trigger, compulsion, emotion, notes
-      };
-
-      // animated dots during analyze
-      let dotsTimer = null;
-      const startDots = (base="Analyzing emotions") => {
-        let n = 0;
-        stopDots();
-        dotsTimer = setInterval(() => {
-          n = (n + 1) % 4;
-          msgEl.textContent = base + ".".repeat(n);
-        }, 400);
-      };
-      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
-
-      try {
-        const oldBtnText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Saving…";
-        msgEl.textContent = "Saving event…";
-
-        // 1) Save event
-        const res = await apiFetch('/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const saved = await res.json().catch(() => ({}));
-        if (!res.ok || !saved.id) {
-          msgEl.textContent = "Error logging event.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          return;
-        }
-
-        // 2) If no notes, done (no AI)
-        const notesTrim = (notes || "").trim();
-        if (!notesTrim) {
-          msgEl.textContent = "Event logged.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          loadAnalytics();
-          return;
-        }
-
-        // 3) Analyze emotions + persist
-        btn.textContent = "Analyzing…";
-        startDots();
-
-        let j = {}, ok = false, err = "";
-        for (let attempt = 1; attempt <= 6; attempt++) {
-          const r = await apiFetch('/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
-          });
-          try { j = await r.json(); } catch { j = {}; }
-          if (r.ok && (j.scores && j.scores.length)) { ok = true; break; }
-
-          const reason = (j.reason || "").toLowerCase();
-          if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429") || reason.includes("hf_unavailable")) {
-            await new Promise(s => setTimeout(s, 700 * attempt));
-            continue;
-          }
-          err = j.reason || `HTTP ${r.status}`; break;
-        }
-
-        stopDots();
-        if (ok) {
-          const top3 = j.scores.slice(0, 3).map(s => `${s.label} ${(s.score*100).toFixed(1)}%`).join(" • ");
-          msgEl.textContent = `Event logged. AI emotions: ${top3}`;
-        } else {
-          msgEl.textContent = `Event logged. AI still warming up…`;
-          console.log("Analyze debug:", j || err);
-        }
-
-        btn.disabled = false; btn.textContent = oldBtnText;
-        loadAnalytics();
-
-      } catch (e2) {
-        stopDots();
-        msgEl.textContent = "Network error.";
-        btn.disabled = false; btn.textContent = "Log Event";
-      }
-    });
-
-    // -------------------------------
-    // Init
-    // -------------------------------
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    localStorage.removeItem('user_id');
     reflectAuthUI();
-    checkBackend();
-    if (localStorage.getItem('user_id')) loadAnalytics();
-  </script>
+    document.getElementById('loginMsg').textContent = '';
+    document.getElementById('signupMsg').textContent = '';
+    document.getElementById('submitMsg').textContent = '';
+  });
+
+  // ------------- Storage abstraction (Local + Cloud)
+  const store = {
+    async signup(email, password){
+      if (getMode()==="local") {
+        const id = crypto.randomUUID();
+        localStorage.setItem('user_'+email, JSON.stringify({id,email,passwordhash:password,created_at:new Date().toISOString()}));
+        return {id};
+      } else {
+        const r = await fetch(`${CLOUD_API_BASE}/users`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password})});
+        if (!r.ok) throw new Error(await r.text());
+        return r.json();
+      }
+    },
+    async login(email, password){
+      if (getMode()==="local") {
+        const raw = localStorage.getItem('user_'+email);
+        if (!raw) throw new Error("User not found");
+        const u = JSON.parse(raw);
+        if (u.passwordhash !== password) throw new Error("Invalid password");
+        return {id:u.id};
+      } else {
+        const r = await fetch(`${CLOUD_API_BASE}/login`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password})});
+        if (!r.ok) throw new Error(await r.text());
+        return r.json();
+      }
+    },
+    async createEvent(ev){
+      if (getMode()==="local") {
+        const key = 'events_'+ev.user_id;
+        const arr = JSON.parse(localStorage.getItem(key) || '[]');
+        const id = crypto.randomUUID();
+        arr.push({...ev, id});
+        localStorage.setItem(key, JSON.stringify(arr));
+        return {id};
+      } else {
+        const r = await fetch(`${CLOUD_API_BASE}/events`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(ev)});
+        if (!r.ok) throw new Error(await r.text());
+        return r.json();
+      }
+    },
+    async listEvents(user_id){
+      if (getMode()==="local") {
+        const arr = JSON.parse(localStorage.getItem('events_'+user_id) || '[]');
+        // Return without user_id field
+        return arr.map(({id,trigger,compulsion,emotion,notes,timestamp,ai_emotion,ai_emotion_scores}) =>
+          ({id,trigger,compulsion,emotion,notes,timestamp,ai_emotion,ai_emotion_scores})
+        ).sort((a,b)=> (a.timestamp<b.timestamp?-1:1));
+      } else {
+        const r = await fetch(`${CLOUD_API_BASE}/events/list?user_id=${encodeURIComponent(user_id)}`);
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        return j.events || [];
+      }
+    },
+    async analytics(user_id){
+      if (getMode()==="local") {
+        const arr = await this.listEvents(user_id);
+        const topTriggers = {};
+        const dailyMap = {};
+        const emos = {};
+        for (const e of arr){
+          topTriggers[e.trigger] = (topTriggers[e.trigger]||0)+1;
+          const d = (e.timestamp||"").slice(0,10);
+          if (d) dailyMap[d] = (dailyMap[d]||0)+1;
+          if (e.ai_emotion) emos[e.ai_emotion]=(emos[e.ai_emotion]||0)+1;
+        }
+        const dailyCounts = Object.entries(dailyMap).sort((a,b)=>a[0]<b[0]?-1:1).map(([date,count])=>({date,count}));
+        return { topTriggers, dailyCounts, aiEmotions: emos };
+      } else {
+        const r = await fetch(`${CLOUD_API_BASE}/analytics?user_id=${encodeURIComponent(user_id)}`);
+        if (!r.ok) throw new Error(await r.text());
+        return r.json();
+      }
+    },
+    async persistAIToEvent(id, ai){
+      if (getMode()==="local") {
+        // write into local record
+        const uid = localStorage.getItem('user_id');
+        const key = 'events_'+uid;
+        const arr = JSON.parse(localStorage.getItem(key) || '[]');
+        const i = arr.findIndex(e => e.id === id);
+        if (i >= 0) { arr[i].ai_emotion = ai.label; arr[i].ai_emotion_scores = ai.scores; localStorage.setItem(key, JSON.stringify(arr)); }
+        return {ok:true};
+      } else {
+        const r = await fetch(`${CLOUD_API_BASE}/events/ai`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id, ai_emotion: ai.label, ai_emotion_scores: ai.scores })
+        });
+        if (!r.ok) throw new Error(await r.text());
+        return r.json();
+      }
+    }
+  };
+
+  // Always-on AI (even in Local mode) — call Worker so HF key stays secret
+  async function analyzeNotes(notes){
+    const r = await fetch(`${CLOUD_API_BASE}/analyze`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ notes })
+    });
+    if (!r.ok) throw new Error("AI error");
+    return r.json();
+  }
+
+  // ---------------- Analytics & Charts
+  function renderDashboard(data) {
+    document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
+    const dates = data.dailyCounts.map(entry => entry.date);
+    const counts = data.dailyCounts.map(entry => entry.count);
+    const labels = Object.keys(data.topTriggers);
+    const values = Object.values(data.topTriggers);
+
+    if (triggerChart) triggerChart.destroy();
+    if (dailyChart) dailyChart.destroy();
+    if (emotionChart) emotionChart.destroy();
+
+    const ctx2 = document.getElementById('dailyChart').getContext('2d');
+    dailyChart = new Chart(ctx2, {
+      type: 'line',
+      data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    const ctx = document.getElementById('triggerChart').getContext('2d');
+    triggerChart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    // Emotion chart
+    const emoLabels = Object.keys(data.aiEmotions||{});
+    const emoValues = Object.values(data.aiEmotions||{});
+    const ectx = document.getElementById('emotionChart').getContext('2d');
+    emotionChart = new Chart(ectx, {
+      type: 'bar',
+      data: { labels: emoLabels, datasets: [{ label: 'AI Emotions', data: emoValues, backgroundColor: 'rgba(255,159,64,0.7)' }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+  }
+
+  async function loadAnalytics() {
+    const userId = localStorage.getItem('user_id');
+    if (!userId) {
+      document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+      return;
+    }
+    try {
+      const data = await store.analytics(userId);
+      renderDashboard(data);
+    } catch (e) {
+      console.error(e);
+      document.getElementById('data-output').textContent = 'Error loading data';
+    }
+  }
+
+  // ---------------- CSV/PDF exports (no user_id)
+  async function getExportRows() {
+    const userId = localStorage.getItem('user_id');
+    const rows = await store.listEvents(userId);
+    // Strip user_id and keep columns we want
+    return rows.map(r => ({
+      id: r.id,
+      trigger: r.trigger || "",
+      compulsion: r.compulsion || "",
+      emotion: r.emotion || "",
+      notes: r.notes || "",
+      timestamp: r.timestamp || "",
+      ai_emotion: r.ai_emotion || ""
+    }));
+  }
+
+  document.getElementById('downloadCsvBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('downloadCsvBtn');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = "Building…";
+    try {
+      const rows = await getExportRows();
+      const header = ["id","trigger","compulsion","emotion","notes","timestamp","ai_emotion"];
+      const csv = [header.join(",")].concat(rows.map(r=> header.map(h=> csvCell(r[h])).join(","))).join("\n");
+      const blob = new Blob([csv], {type: "text/csv"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "events.csv";
+      a.click();
+    } finally { btn.disabled=false; btn.textContent=old; }
+  });
+
+  document.getElementById('downloadPdfBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('downloadPdfBtn');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = "Building…";
+    try {
+      const rows = await getExportRows();
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "pt", format: "letter" });
+      doc.setFontSize(16); doc.text("OCD Tracker — Events Export", 40, 40);
+
+      // simple table
+      const header = ["id","trigger","compulsion","emotion","notes","timestamp","ai_emotion"];
+      const colX = [40, 120, 220, 330, 410, 510, 600]; // rough columns
+      doc.setFontSize(9);
+      header.forEach((h,i)=> doc.text(h, colX[i], 70));
+
+      let y = 90;
+      const wrap = (t, max=34)=> (t||"").length<=max? [t||""] : (t||"").match(new RegExp(`.{1,${max}}`,'g'));
+      rows.forEach(r => {
+        const cells = header.map(h=> String(r[h]||""));
+        // wrap notes
+        const notesLines = wrap(cells[4], 40);
+        const lines = Math.max(1, notesLines.length);
+        for (let li=0; li<lines; li++){
+          const vals = [
+            li? "":cells[0],
+            li? "":cells[1],
+            li? "":cells[2],
+            li? "":cells[3],
+            notesLines[li] || "",
+            li? "":cells[5],
+            li? "":cells[6],
+          ];
+          vals.forEach((v,i)=> doc.text(String(v), colX[i], y));
+          y += 14;
+          if (y > 740) { doc.addPage(); y = 60; }
+        }
+        y += 6;
+      });
+
+      doc.save("events.pdf");
+    } finally { btn.disabled=false; btn.textContent=old; }
+  });
+
+  function csvCell(v){ if (v==null) return ""; const s = String(v).replaceAll('"','""'); return `"${s}"`; }
+
+  // ---------------- Forms
+  document.getElementById('signupForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email = document.getElementById('signupEmail').value;
+    const password = document.getElementById('signupPassword').value;
+    try {
+      const r = await store.signup(email, password);
+      localStorage.setItem('user_id', r.id);
+      document.getElementById('signupMsg').textContent = "Signup successful!";
+      reflectAuthUI(); loadAnalytics(); if (getMode()==="cloud") checkBackend();
+    } catch (err) {
+      document.getElementById('signupMsg').textContent = String(err);
+    }
+  });
+
+  document.getElementById('loginForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
+    try {
+      const r = await store.login(email, password);
+      localStorage.setItem('user_id', r.id);
+      document.getElementById('loginMsg').textContent = "Login successful!";
+      reflectAuthUI(); loadAnalytics(); if (getMode()==="cloud") checkBackend();
+    } catch (err) {
+      document.getElementById('loginMsg').textContent = String(err);
+    }
+  });
+
+  // Always analyze (AI not optional), even in Local mode
+  document.getElementById('eventForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const userId = localStorage.getItem('user_id');
+    const msgEl = document.getElementById('submitMsg');
+    const btn = e.target.querySelector('button[type="submit"]');
+    if (!userId) { msgEl.textContent = "Please log in first."; return; }
+
+    const trigger = document.getElementById('trigger').value;
+    const compulsion = document.getElementById('compulsion').value;
+    const emotion = document.getElementById('emotion').value;
+    const notes = document.getElementById('notes').value;
+
+    const payload = { user_id: userId, timestamp: new Date().toISOString(), trigger, compulsion, emotion, notes };
+
+    let dotsTimer=null;
+    const startDots = (base="Analyzing")=>{
+      let n=0; stopDots();
+      dotsTimer=setInterval(()=>{ n=(n+1)%4; msgEl.textContent = base + ".".repeat(n); }, 400);
+    };
+    const stopDots = ()=> { if (dotsTimer){ clearInterval(dotsTimer); dotsTimer=null; } };
+
+    try {
+      btn.disabled=true; const old=btn.textContent; btn.textContent="Saving…"; msgEl.textContent="Saving event…";
+      // 1) Save event (local or cloud)
+      const saved = await store.createEvent(payload);
+      // 2) Always run AI (even local mode)
+      btn.textContent="Analyzing…"; startDots("Analyzing emotions");
+      const ai = await analyzeNotes((notes||"").trim() || trigger || emotion || compulsion || "note");
+      await store.persistAIToEvent(saved.id, ai);
+      stopDots();
+      const top3 = (ai.scores||[]).slice(0,3).map(s=>`${s.label} ${(s.score*100).toFixed(1)}%`).join(" • ");
+      msgEl.textContent = `Event logged. AI emotions: ${top3}`;
+      btn.textContent=old; btn.disabled=false;
+      loadAnalytics();
+    } catch (err) {
+      stopDots();
+      msgEl.textContent = "Error: " + String(err);
+      btn.disabled=false; btn.textContent="Log Event";
+    }
+  });
+
+  // ---------------- Init
+  reflectAuthUI();
+  if (getMode()==="cloud") checkBackend();
+  if (localStorage.getItem('user_id')) loadAnalytics();
+</script>
 </body>
 </html>
