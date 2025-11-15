@@ -101,9 +101,7 @@
   </div>
 
   <script>
-    // -------------------------------
     // Config
-    // -------------------------------
     const API_BASE =
       (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
         ? "http://127.0.0.1:5000"
@@ -111,9 +109,7 @@
 
     const api = (path) => `${API_BASE}${path}`;
 
-    // -------------------------------
-    // Backend status / readiness
-    // -------------------------------
+    // Backend status
     const $status = document.getElementById('backendStatus');
     const $statusText = document.getElementById('backendStatusText');
 
@@ -137,7 +133,6 @@
       setTimeout(hideStatus, 1200);
     }
 
-    // Wrap fetch so ANY successful API call hides the banner
     async function apiFetch(path, opts = {}) {
       const res = await fetch(`${API_BASE}${path}`, opts);
       if (res.ok) markBackendReady();
@@ -157,7 +152,6 @@
       const t0 = Date.now();
       showStatus("Contacting server…");
 
-      // Is the container up?
       let up = false;
       for (let i = 0; i < 3; i++) {
         try {
@@ -167,7 +161,6 @@
       }
       if (!up) showStatus("Waking the server… (Render free tier may take ~30–60s)");
 
-      // Poll /readyz until ready (stop if any other call marks ready)
       readyPoll = setInterval(async () => {
         if (BACKEND_READY) { clearInterval(readyPoll); readyPoll = null; return; }
         try {
@@ -186,9 +179,7 @@
       }, 2500);
     }
 
-    // -------------------------------
-    // UI state & helpers
-    // -------------------------------
+    // Charts
     let triggerChart = null;
     let dailyChart = null;
     let emotionChart = null;
@@ -228,7 +219,9 @@
             a.click();
             break;
           }
-        } catch (e) { console.warn("Retrying after error:", e); }
+        } catch (e) {
+          console.warn("Retrying after error:", e);
+        }
         await new Promise(r => setTimeout(r, 2000));
       }
       btn.disabled = false;
@@ -287,7 +280,6 @@
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
-      // Emotion bar chart (AI)
       if (data.aiEmotions) {
         const emoLabels = Object.keys(data.aiEmotions);
         const emoValues = Object.values(data.aiEmotions);
@@ -300,7 +292,7 @@
       }
     }
 
-    // --- SIGNUP ---
+    // SIGNUP
     document.getElementById('signupForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('signupEmail').value;
@@ -319,14 +311,15 @@
           reflectAuthUI();
           loadAnalytics();
         } else {
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
+          document.getElementById('signupMsg').textContent =
+            "Signup failed: " + (data.error || `HTTP ${res.status}`);
         }
       } catch {
         document.getElementById('signupMsg').textContent = "Network error.";
       }
     });
 
-    // --- LOGIN ---
+    // LOGIN
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value;
@@ -345,14 +338,15 @@
           reflectAuthUI();
           loadAnalytics();
         } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
+          document.getElementById('loginMsg').textContent =
+            "Login failed: " + (data.error || `HTTP ${res.status}`);
         }
       } catch {
         document.getElementById('loginMsg').textContent = "Network error.";
       }
     });
 
-    // --- EVENT SUBMIT (robust: logging independent of AI) ---
+    // EVENT SUBMIT
     document.getElementById('eventForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const userId = localStorage.getItem('user_id');
@@ -363,22 +357,20 @@
         return;
       }
 
-      const trigger    = document.getElementById('trigger').value;
+      const trigger = document.getElementById('trigger').value;
       const compulsion = document.getElementById('compulsion').value;
-      const emotion    = document.getElementById('emotion').value;
-      const notes      = document.getElementById('notes').value;
+      const emotion = document.getElementById('emotion').value;
+      const notes = document.getElementById('notes').value;
 
       const payload = {
         user_id: userId,
         timestamp: new Date().toISOString(),
-        trigger,
-        compulsion,
-        emotion,
-        notes
+        trigger, compulsion, emotion, notes
       };
 
+      // dots helper
       let dotsTimer = null;
-      const startDots = (base = "Analyzing emotions") => {
+      const startDots = (base="Analyzing emotions") => {
         let n = 0;
         stopDots();
         dotsTimer = setInterval(() => {
@@ -386,28 +378,21 @@
           msgEl.textContent = base + ".".repeat(n);
         }, 400);
       };
-      const stopDots = () => {
-        if (dotsTimer) {
-          clearInterval(dotsTimer);
-          dotsTimer = null;
-        }
-      };
-
-      const oldBtnText = btn.textContent;
+      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
 
       try {
-        // 1) Save event
+        const oldBtnText = btn.textContent;
         btn.disabled = true;
         btn.textContent = "Saving…";
         msgEl.textContent = "Saving event…";
 
+        // 1) Save event
         const res = await apiFetch('/events', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const saved = await res.json().catch(() => ({}));
-
         if (!res.ok || !saved.id) {
           msgEl.textContent = "Error logging event.";
           btn.disabled = false;
@@ -415,7 +400,7 @@
           return;
         }
 
-        // Event IS now in DB – refresh charts immediately
+        // Immediately refresh analytics so graphs update even if AI dies
         loadAnalytics();
 
         const notesTrim = (notes || "").trim();
@@ -426,67 +411,63 @@
           return;
         }
 
-        // 2) AI emotions (best effort, doesn't affect logging)
+        // 2) Fire AI analyze in a separate async block so failure doesn't look like total network death
         btn.textContent = "Analyzing…";
         startDots();
 
-        let j = {}, ok = false, err = "";
-        for (let attempt = 1; attempt <= 6; attempt++) {
-          const r = await apiFetch('/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
-          });
-          try { j = await r.json(); } catch { j = {}; }
+        (async () => {
+          try {
+            let j = {}, ok = false, err = "";
+            for (let attempt = 1; attempt <= 6; attempt++) {
+              const r = await apiFetch('/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
+              });
+              try { j = await r.json(); } catch { j = {}; }
+              if (r.ok && (j.scores && j.scores.length)) { ok = true; break; }
 
-          if (r.ok && j.scores && j.scores.length) {
-            ok = true;
-            break;
+              const reason = (j.reason || "").toLowerCase();
+              if (reason.includes("503") || reason.includes("warm") ||
+                  reason.includes("network") || reason.includes("429") ||
+                  reason.includes("hf_unavailable")) {
+                await new Promise(s => setTimeout(s, 700 * attempt));
+                continue;
+              }
+              err = j.reason || `HTTP ${r.status}`;
+              break;
+            }
+
+            stopDots();
+            if (ok) {
+              const top3 = j.scores.slice(0, 3)
+                .map(s => `${s.label} ${(s.score*100).toFixed(1)}%`)
+                .join(" • ");
+              msgEl.textContent = `Event logged. AI emotions: ${top3}`;
+            } else {
+              msgEl.textContent = `Event logged. AI still warming up…`;
+              console.log("Analyze debug:", j || err);
+            }
+          } catch (e2) {
+            stopDots();
+            console.error("Analyze error:", e2);
+            msgEl.textContent = "Event logged. AI analysis unavailable right now.";
+          } finally {
+            btn.disabled = false;
+            btn.textContent = "Log Event";
           }
-
-          const reason = (j.reason || "").toLowerCase();
-          if (
-            reason.includes("503") ||
-            reason.includes("warm") ||
-            reason.includes("network") ||
-            reason.includes("429") ||
-            reason.includes("hf_unavailable") ||
-            reason.includes("no_api_key")
-          ) {
-            await new Promise(s => setTimeout(s, 700 * attempt));
-            continue;
-          }
-
-          err = j.reason || `HTTP ${r.status}`;
-          break;
-        }
-
-        stopDots();
-
-        if (ok) {
-          const top3 = j.scores
-            .slice(0, 3)
-            .map(s => `${s.label} ${(s.score * 100).toFixed(1)}%`)
-            .join(" • ");
-          msgEl.textContent = `Event logged. AI emotions: ${top3}`;
-        } else {
-          msgEl.textContent = "Event logged. AI still warming up or unavailable.";
-          console.log("Analyze debug:", j || err);
-        }
+        })();
 
       } catch (e2) {
         stopDots();
-        console.error(e2);
-        msgEl.textContent = "Event logged, but emotion analysis hit a network error. Check Analytics/Export to confirm.";
-      } finally {
+        console.error("Event submit error:", e2);
+        msgEl.textContent = "Network error while saving event.";
         btn.disabled = false;
-        btn.textContent = oldBtnText;
+        btn.textContent = "Log Event";
       }
     });
 
-    // -------------------------------
     // Init
-    // -------------------------------
     reflectAuthUI();
     checkBackend();
     if (localStorage.getItem('user_id')) loadAnalytics();

@@ -8,6 +8,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 
 import psycopg2
+from psycopg2 import errorcodes
 import uuid
 from datetime import datetime
 import csv
@@ -29,24 +30,24 @@ HUGGINGFACE_MODEL = os.getenv(
 )
 
 
-# ---------------- DB connection / schema ----------------
+# ---------------- DB connection + schema ----------------
 def fGetConnection():
     conn_str = os.getenv("DATABASE_URL")
     if not conn_str:
         raise Exception("DATABASE_URL not set")
+    # psycopg2 can handle SSL params in the URL (Render style)
     return psycopg2.connect(conn_str)
 
 
 def fEnsureCoreSchema():
     """
-    Create core tables if they don't exist (users, events).
+    Make sure users + events tables exist with AI columns.
     Safe to call multiple times.
     """
     try:
         conn = fGetConnection()
         cur = conn.cursor()
 
-        # users table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.users (
                 id uuid PRIMARY KEY,
@@ -56,7 +57,6 @@ def fEnsureCoreSchema():
             );
         """)
 
-        # events table (with AI columns)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.events (
                 id uuid PRIMARY KEY,
@@ -87,16 +87,25 @@ def fPostUser():
     if not sEmail or not sPassword:
         return jsonify({"error": "Missing fields"}), 400
 
-    sPasswordHash = bcrypt.generate_password_hash(sPassword).decode("utf-8")
-    sId = str(uuid.uuid4())
-    dtCreatedAt = datetime.utcnow()
-
     try:
-        # make sure tables exist
+        # Ensure tables exist
         fEnsureCoreSchema()
 
         conn = fGetConnection()
         cur = conn.cursor()
+
+        # Prevent duplicate emails even without a DB UNIQUE constraint
+        cur.execute("SELECT id FROM users WHERE email = %s", (sEmail,))
+        row = cur.fetchone()
+        if row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Email already registered"}), 409
+
+        sPasswordHash = bcrypt.generate_password_hash(sPassword).decode("utf-8")
+        sId = str(uuid.uuid4())
+        dtCreatedAt = datetime.utcnow()
+
         cur.execute("""
             INSERT INTO users (id, email, passwordhash, created_at)
             VALUES (%s, %s, %s, %s)
@@ -105,6 +114,12 @@ def fPostUser():
         cur.close()
         conn.close()
         return jsonify({"id": sId}), 201
+
+    except psycopg2.Error as e:
+        # If later you add UNIQUE(email) in DB, this catches that too
+        if e.pgcode == errorcodes.UNIQUE_VIOLATION:
+            return jsonify({"error": "Email already registered"}), 409
+        return jsonify({"error": f"DB error: {e.pgcode}"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -118,8 +133,6 @@ def fLogin():
         return jsonify({"error": "Missing fields"}), 400
 
     try:
-        fEnsureCoreSchema()
-
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("SELECT id, passwordhash FROM users WHERE email = %s", (sEmail,))
@@ -154,7 +167,6 @@ def create_event():
 
     try:
         fEnsureCoreSchema()
-
         conn = fGetConnection()
         cur = conn.cursor()
         new_id = str(uuid.uuid4())
@@ -333,15 +345,12 @@ def fHealth():
 @app.route("/readyz", methods=["GET"])
 def fReady():
     try:
+        fEnsureCoreSchema()
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("SELECT 1")
         cur.close()
         conn.close()
-
-        # ensure schema exists
-        fEnsureCoreSchema()
-
         return jsonify({"status": "ready"}), 200
     except Exception as e:
         return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
@@ -360,16 +369,29 @@ def analyze():
     if not notes:
         return jsonify({"error": "notes required"}), 400
 
-    # If no API key configured, don't blow up – just return "unavailable"
+    # No API key? Just skip real HF call and return stub.
     if not HUGGINGFACE_API_KEY:
-        return jsonify({
-            "available": False,
-            "reason": "no_api_key",
+        resp = {
+            "label": "unknown",
+            "score": 0.0,
             "scores": [],
-            "label": None,
             "model": HUGGINGFACE_MODEL,
             "attempts": 0
-        }), 200
+        }
+        if event_id:
+            try:
+                conn = fGetConnection()
+                cur = conn.cursor()
+                cur.execute(
+                    'UPDATE events SET ai_emotion = %s, ai_emotion_scores = %s WHERE id = %s',
+                    (resp["label"], json.dumps(resp["scores"]), event_id)
+                )
+                conn.commit()
+                cur.close()
+                conn.close()
+            except Exception as e:
+                resp["persist_warning"] = f"Could not save ai_emotion: {e}"
+        return jsonify(resp), 200
 
     notes = notes[:500]
     url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
