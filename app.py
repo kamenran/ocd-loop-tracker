@@ -1,746 +1,367 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>OCD Tracker Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body {
-      font-family: 'Segoe UI', Roboto, sans-serif;
-      background: #f9fafc;
-      color: #2C3E50;
-      line-height: 1.5;
-      margin: 0;
-      padding: 20px;
+from flask import Flask, request, jsonify, Response, send_file
+from flask_cors import CORS
+from flask_bcrypt import Bcrypt
+from io import BytesIO
+from reportlab.lib.pagesizes import LETTER
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+
+import psycopg2
+import uuid
+from datetime import datetime
+import csv
+import os
+import io
+import time
+import requests
+import json
+
+app = Flask(__name__)
+bcrypt = Bcrypt(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+
+# --- Hugging Face Emotion model (better than sentiment) ---
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+HUGGINGFACE_MODEL = os.getenv(
+    "HUGGINGFACE_MODEL",
+    "j-hartmann/emotion-english-distilroberta-base"  # default
+)
+
+# --- DB connection ---
+def fGetConnection():
+    conn_str = os.getenv("DATABASE_URL")
+    if not conn_str:
+        raise Exception("DATABASE_URL not set")
+    return psycopg2.connect(conn_str)
+
+# ---------------- Users ----------------
+@app.route("/users", methods=["POST"])
+def fPostUser():
+    data = request.json or {}
+    sEmail = data.get("email")
+    sPassword = data.get("password")
+    if not sEmail or not sPassword:
+        return jsonify({"error": "Missing fields"}), 400
+
+    sPasswordHash = bcrypt.generate_password_hash(sPassword).decode("utf-8")
+    sId = str(uuid.uuid4())
+    dtCreatedAt = datetime.utcnow()
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (id, email, passwordhash, created_at)
+            VALUES (%s, %s, %s, %s)
+        """, (sId, sEmail, sPasswordHash, dtCreatedAt))
+        conn.commit()
+        cur.close(); conn.close()
+        return jsonify({"id": sId}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/login", methods=["POST"])
+def fLogin():
+    data = request.json or {}
+    sEmail = data.get("email")
+    sPassword = data.get("password")
+    if not sEmail or not sPassword:
+        return jsonify({"error": "Missing fields"}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, passwordhash FROM users WHERE email = %s", (sEmail,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+
+        if not row:
+            return jsonify({"error": "User not found"}), 404
+
+        sUserId, sPasswordHash = row
+        if bcrypt.check_password_hash(sPasswordHash, sPassword):
+            return jsonify({"id": sUserId}), 200
+        return jsonify({"error": "Invalid password"}), 401
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------- Events ----------------
+@app.route('/events', methods=['POST'])
+def create_event():
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    timestamp = data.get('timestamp')
+    trigger = data.get('trigger')
+    compulsion = data.get('compulsion')
+    emotion = data.get('emotion')
+    notes = data.get('notes', '')
+
+    if not user_id or not timestamp or not trigger:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        new_id = str(uuid.uuid4())
+        cur.execute("""
+            INSERT INTO events (id, user_id, "trigger", compulsion, emotion, notes, timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
+        """, (new_id, user_id, trigger, compulsion, emotion, notes, timestamp))
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close(); conn.close()
+        return jsonify({'id': str(new_id)}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ---------------- Analytics ----------------
+@app.route('/analytics', methods=['GET'])
+def fGetAnalytics():
+    sUserId = request.args.get('user_id')
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
+
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+
+        # Top triggers
+        cur.execute("""
+            SELECT "trigger", COUNT(*) AS count
+            FROM events
+            WHERE user_id = %s
+            GROUP BY "trigger"
+            ORDER BY count DESC;
+        """, (sUserId,))
+        trigger_rows = cur.fetchall()
+        top_triggers = {row[0]: row[1] for row in trigger_rows}
+
+        # Daily counts
+        cur.execute("""
+            SELECT DATE(timestamp) AS date, COUNT(*) AS count
+            FROM events
+            WHERE user_id = %s
+            GROUP BY DATE(timestamp)
+            ORDER BY date ASC;
+        """, (sUserId,))
+        date_rows = cur.fetchall()
+        daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
+
+        # NEW: AI emotion distribution
+        cur.execute("""
+            SELECT ai_emotion, COUNT(*) AS c
+            FROM events
+            WHERE user_id = %s AND ai_emotion IS NOT NULL
+            GROUP BY ai_emotion
+            ORDER BY c DESC;
+        """, (sUserId,))
+        ai_rows = cur.fetchall()
+        ai_emotions = {row[0]: row[1] for row in ai_rows}
+
+        cur.close(); conn.close()
+        return jsonify({
+            "topTriggers": top_triggers,
+            "dailyCounts": daily_counts,
+            "aiEmotions": ai_emotions,  # for emotion chart
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ---------------- Exports ----------------
+@app.route('/export/csv', methods=['GET'])
+def fExportCSV():
+    sUserId = request.args.get('user_id')
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp, ai_emotion
+            FROM events
+            WHERE user_id = %s
+            ORDER BY timestamp ASC;
+        """, (sUserId,))
+        rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        cur.close(); conn.close()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(colnames)
+        writer.writerows(rows)
+
+        resp = Response(output.getvalue(), mimetype='text/csv')
+        resp.headers.set("Content-Disposition", "attachment", filename="events.csv")
+        return resp
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/export/pdf', methods=['GET'])
+def fExportPDF():
+    sUserId = request.args.get('user_id')
+    if not sUserId:
+        return jsonify({'error': 'user_id is required'}), 400
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp, ai_emotion
+            FROM events
+            WHERE user_id = %s
+            ORDER BY timestamp ASC;
+        """, (sUserId,))
+        rows = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        cur.close(); conn.close()
+    except Exception as e:
+        return jsonify({'error': f'DB error: {e}'}), 500
+
+    try:
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=LETTER, title="OCD Events Export")
+
+        data = [colnames]
+        for r in rows:
+            r = list(r)
+            # timestamp -> string
+            try:
+                r[6] = r[6].strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                r[6] = str(r[6]) if r[6] is not None else ""
+            # trim long notes
+            if r[5] and len(str(r[5])) > 200:
+                r[5] = str(r[5])[:200] + "..."
+            data.append(r)
+
+        table = Table(data, hAlign='LEFT')
+        table.setStyle(TableStyle([
+            ('BACKGROUND',      (0,0), (-1,0), colors.HexColor('#1ABC9C')),
+            ('TEXTCOLOR',       (0,0), (-1,0), colors.white),
+            ('FONTNAME',        (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE',        (0,0), (-1,0), 10),
+            ('GRID',            (0,0), (-1,-1), 0.25, colors.grey),
+            ('ROWBACKGROUNDS',  (0,1), (-1,-1), [colors.whitesmoke, colors.HexColor('#F7F9FB')]),
+            ('FONTSIZE',        (0,1), (-1,-1), 9),
+            ('VALIGN',          (0,0), (-1,-1), 'TOP'),
+        ]))
+
+        styles = getSampleStyleSheet()
+        title = Paragraph(f"<b>OCD Tracker — Events Export</b><br/>User: {sUserId}", styles['Title'])
+
+        doc.build([title, table])
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f"events_{sUserId}.pdf"
+        )
+    except Exception as e:
+        return jsonify({'error': f'PDF error: {e}'}), 500
+
+# ---------------- Health ----------------
+@app.route("/healthz", methods=["GET"])
+def fHealth():
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/readyz", methods=["GET"])
+def fReady():
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close(); conn.close()
+        return jsonify({"status": "ready"}), 200
+    except Exception as e:
+        return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
+
+# ---------------- Analyze (Emotion AI) ----------------
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    """
+    Emotion detection for a note. Optionally persists to the event row.
+    Request JSON: { notes: str, event_id?: str }
+    Response JSON: {
+      label: str,
+      score: float,
+      scores: [{label,score}, ...],
+      model: str,
+      attempts: int
     }
-    body { font-family: 'Segoe UI', Roboto, sans-serif; background: #f9fafc; color: #2C3E50; line-height: 1.5; margin: 0; padding: 20px; }
-    .container { max-width: 900px; margin: auto; }
-    header { text-align: center; margin-bottom: 30px; }
-    h1 { color: #1ABC9C; margin-bottom: 8px; }
-    h2 { color: #34495E; margin-top: 0; }
-    .card {
-      background: #fff;
-      border-radius: 10px;
-      padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    }
-    .card { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-    label { display: block; margin: 10px 0 5px; font-weight: 500; }
-    input, textarea, button {
-      width: 100%; padding: 10px; border: 1px solid #ddd;
-      border-radius: 6px; font-size: 14px; margin-bottom: 12px;
-      box-sizing: border-box;
-    }
-    input, textarea, button { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; }
-    textarea { resize: vertical; }
-    button {
-      background: #1ABC9C; color: white; border: none;
-      font-weight: bold; cursor: pointer; transition: background 0.2s;
-    }
-    button { background: #1ABC9C; color: white; border: none; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-    button:hover { background: #16a085; }
-    button:disabled { background: #95a5a6; cursor: not-allowed; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-    p.msg { font-size: 14px; margin-top: -8px; margin-bottom: 10px; }
-    p.error { color: #e74c3c; }
-    p.success { color: #27ae60; }
-    footer {
-      text-align: center; font-size: 13px; color: #7f8c8d; margin-top: 30px;
-    }
-    footer { text-align: center; font-size: 13px; color: #7f8c8d; margin-top: 30px; }
-    @media (max-width: 600px) { body { padding: 15px; } .actions { flex-direction: column; } }
-  </style>
-</head>
-@@ -101,7 +77,7 @@
-        <input type="text" id="trigger" required>
-        <label>Compulsion:</label>
-        <input type="text" id="compulsion">
-        <label>Emotion:</label>
-        <label>Emotion (optional):</label>
-        <input type="text" id="emotion">
-        <label>Notes:</label>
-        <textarea id="notes"></textarea>
-@@ -115,353 +91,368 @@
-      <h2>Analytics</h2>
-      <canvas id="triggerChart" height="300"></canvas>
-      <canvas id="dailyChart" height="300"></canvas>
-      <!-- NEW: Emotion chart -->
-      <canvas id="emotionChart" height="300"></canvas>
-      <pre id="data-output">Loading...</pre>
-    </div>
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    notes = (data.get("notes") or "").strip()
+    event_id = data.get("event_id")
+    if not notes:
+        return jsonify({"error": "notes required"}), 400
 
-    <footer>
-      <p>OCD Tracker 2025 • Built by Kamran Eisenberg</p>
-    </footer>
-  </div>
-<script>
-  // -------------------------------
-  // Config
-  // -------------------------------
-  const API_BASE =
-    (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-      ? "http://127.0.0.1:5000"
-      : "https://ocd-loop-tracker.onrender.com"; // change to your Cloud Run URL when you migrate
+    notes = notes[:500]
+    url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"} if HUGGINGFACE_API_KEY else {}
+    payload = {"inputs": notes}
 
-  const api = (path) => `${API_BASE}${path}`;
+    max_attempts = 8
+    attempt = 0
+    out_json = None
+    last_err = None
 
-  // -------------------------------
-  // Backend status / readiness
-  // -------------------------------
-  const $status = document.getElementById('backendStatus');
-  const $statusText = document.getElementById('backendStatusText');
+    while attempt < max_attempts:
+        attempt += 1
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=15)
+            if r.status_code == 503:
+                time.sleep(min(1.5 * attempt, 8))
+                continue
+            r.raise_for_status()
+            out_json = r.json()
+            break
+        except Exception as e:
+            last_err = e
+            time.sleep(min(1.5 * attempt, 8))
+            continue
 
-  function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
-    $status.style.display = 'block';
-    $status.firstElementChild.style.color = color;
-    $status.firstElementChild.style.background = bg;
-    $status.firstElementChild.style.borderColor = border;
-    $statusText.textContent = msg;
-  }
-  function hideStatus() { $status.style.display = 'none'; }
+    if out_json is None:
+        return jsonify({"available": False, "reason": f"hf_unavailable: {last_err}"}), 503
 
-  let BACKEND_READY = false;
-  let readyPoll = null;
+    # HF may return [[...]] or [...]
+    seq = out_json[0] if (isinstance(out_json, list) and out_json and isinstance(out_json[0], list)) else out_json
+    if not isinstance(seq, list) or not seq:
+        return jsonify({"available": False, "reason": "unexpected_response"}), 502
 
-  function markBackendReady() {
-    if (BACKEND_READY) return;
-    BACKEND_READY = true;
-    if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
-    showStatus("Server ready", "#155724", "#d4edda", "#c3e6cb");
-    setTimeout(hideStatus, 1200);
-  }
-
-  // Wrap fetch so ANY successful API call hides the banner
-  async function apiFetch(path, opts = {}) {
-    const res = await fetch(`${API_BASE}${path}`, opts);
-    if (res.ok) markBackendReady();
-    return res;
-  }
-
-  async function ping(path, { timeoutMs = 5000 } = {}) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
-      return res;
-    } finally { clearTimeout(t); }
-  }
-
-  async function checkBackend() {
-    const t0 = Date.now();
-    showStatus("Contacting server…");
-  <script>
-    // -------------------------------
-    // Config
-    // -------------------------------
-    const API_BASE =
-      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-        ? "http://127.0.0.1:5000"
-        : "https://ocd-loop-tracker.onrender.com";
-
-    const api = (path) => `${API_BASE}${path}`;
-
-    // -------------------------------
-    // Backend status / readiness
-    // -------------------------------
-    const $status = document.getElementById('backendStatus');
-    const $statusText = document.getElementById('backendStatusText');
-
-    function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
-      $status.style.display = 'block';
-      $status.firstElementChild.style.color = color;
-      $status.firstElementChild.style.background = bg;
-      $status.firstElementChild.style.borderColor = border;
-      $statusText.textContent = msg;
-    }
-    function hideStatus() { $status.style.display = 'none'; }
-
-    // Is the container up?
-    let up = false;
-    for (let i = 0; i < 3; i++) {
-      try {
-        const r = await ping('/healthz', { timeoutMs: 3000 + i * 2000 });
-        if (r.ok) { up = true; break; }
-      } catch {}
-    let BACKEND_READY = false;
-    let readyPoll = null;
-
-    function markBackendReady() {
-      if (BACKEND_READY) return;
-      BACKEND_READY = true;
-      if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
-      showStatus("Server ready", "#155724", "#d4edda", "#c3e6cb");
-      setTimeout(hideStatus, 1200);
-    }
-    if (!up) {
-      showStatus("Waking the server… (Render free tier may take ~30–60s)");
-
-    // Wrap fetch so ANY successful API call hides the banner
-    async function apiFetch(path, opts = {}) {
-      const res = await fetch(`${API_BASE}${path}`, opts);
-      if (res.ok) markBackendReady();
-      return res;
-    }
-
-    // Start polling /readyz until ready (and stop if any other call marks ready)
-    readyPoll = setInterval(async () => {
-      if (BACKEND_READY) { clearInterval(readyPoll); readyPoll = null; return; }
-      try {
-        const r = await ping('/readyz', { timeoutMs: 5000 });
-        if (r.ok) {
-          const total = Math.round((Date.now() - t0) / 1000);
-          showStatus(`Server ready in ${total}s`, "#155724", "#d4edda", "#c3e6cb");
-          setTimeout(markBackendReady, 200);
-          return;
-        }
-      } catch {}
-      const elapsed = Math.round((Date.now() - t0) / 1000);
-      if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
-      else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
-      else showStatus(`Almost there (cold start)… (${elapsed}s)`);
-    }, 2500);
-  }
-
-  // -------------------------------
-  // UI state & helpers
-  // -------------------------------
-  let triggerChart = null;
-  let dailyChart = null;
-
-  function reflectAuthUI() {
-    const uid = localStorage.getItem('user_id');
-    const authed = !!uid;
-    document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
-    document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
-    document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
-    document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
-    document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
-    document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-    if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-  }
-
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    localStorage.removeItem('user_id');
-    reflectAuthUI();
-    document.getElementById('loginMsg').textContent = '';
-    document.getElementById('signupMsg').textContent = '';
-    document.getElementById('submitMsg').textContent = '';
-  });
-
-  // Download helpers — now call apiFetch so success hides banner
-  async function downloadUntilReady(path, filename, btn) {
-    btn.disabled = true;
-    const originalText = btn.textContent;
-    btn.textContent = "Loading...";
-    while (true) {
-    async function ping(path, { timeoutMs = 5000 } = {}) {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await apiFetch(path);
-        if (res.ok) {
-          const blob = await res.blob();
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = filename;
-          a.click();
-          break;
-        }
-      } catch (e) { console.warn("Retrying after error:", e); }
-      await new Promise(r => setTimeout(r, 2000));
-        const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
-        return res;
-      } finally { clearTimeout(t); }
-    }
-    btn.disabled = false;
-    btn.textContent = originalText;
-  }
-
-  document.getElementById('downloadCsvBtn').addEventListener('click', () => {
-    const userId = localStorage.getItem('user_id');
-    if (!userId) { alert("Please log in first."); return; }
-    downloadUntilReady(`/export/csv?user_id=${encodeURIComponent(userId)}`, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
-  });
-
-  document.getElementById('downloadPdfBtn').addEventListener('click', () => {
-    const userId = localStorage.getItem('user_id');
-    if (!userId) { alert("Please log in first."); return; }
-    downloadUntilReady(`/export/pdf?user_id=${encodeURIComponent(userId)}`, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
-  });
-
-  function loadAnalytics() {
-    const userId = localStorage.getItem('user_id');
-    if (!userId) {
-      document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-      return;
-
-    async function checkBackend() {
-      const t0 = Date.now();
-      showStatus("Contacting server…");
-
-      // Is the container up?
-      let up = false;
-      for (let i = 0; i < 3; i++) {
-        try {
-          const r = await ping('/healthz', { timeoutMs: 3000 + i * 2000 });
-          if (r.ok) { up = true; break; }
-        } catch {}
-      }
-      if (!up) showStatus("Waking the server… (Render free tier may take ~30–60s)");
-
-      // Poll /readyz until ready (stop if any other call marks ready)
-      readyPoll = setInterval(async () => {
-        if (BACKEND_READY) { clearInterval(readyPoll); readyPoll = null; return; }
-        try {
-          const r = await ping('/readyz', { timeoutMs: 5000 });
-          if (r.ok) {
-            const total = Math.round((Date.now() - t0) / 1000);
-            showStatus(`Server ready in ${total}s`, "#155724", "#d4edda", "#c3e6cb");
-            setTimeout(markBackendReady, 200);
-            return;
-          }
-        } catch {}
-        const elapsed = Math.round((Date.now() - t0) / 1000);
-        if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
-        else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
-        else showStatus(`Almost there (cold start)… (${elapsed}s)`);
-      }, 2500);
-    }
-    apiFetch(`/analytics?user_id=${encodeURIComponent(userId)}`)
-      .then(r => r.json())
-      .then(data => renderDashboard(data))
-      .catch(err => {
-        console.error(err);
-        document.getElementById('data-output').textContent = 'Error loading data';
-      });
-  }
-
-  function renderDashboard(data) {
-    document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
-    const dates = data.dailyCounts.map(entry => entry.date);
-    const counts = data.dailyCounts.map(entry => entry.count);
-    const labels = Object.keys(data.topTriggers);
-    const values = Object.values(data.topTriggers);
-
-    if (triggerChart) triggerChart.destroy();
-    if (dailyChart) dailyChart.destroy();
-
-    const ctx2 = document.getElementById('dailyChart').getContext('2d');
-    dailyChart = new Chart(ctx2, {
-      type: 'line',
-      data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
-      options: { responsive: true, scales: { y: { beginAtZero: true } } }
-
-    // -------------------------------
-    // UI state & helpers
-    // -------------------------------
-    let triggerChart = null;
-    let dailyChart = null;
-    let emotionChart = null;
-
-    function reflectAuthUI() {
-      const uid = localStorage.getItem('user_id');
-      const authed = !!uid;
-      document.getElementById('signupForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('loginForm').style.display = authed ? 'none' : 'block';
-      document.getElementById('eventForm').style.display = authed ? 'block' : 'none';
-      document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
-      document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-      if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+    scores_sorted = sorted(
+        [{"label": s.get("label"), "score": float(s.get("score", 0.0))} for s in seq if "label" in s],
+        key=lambda x: x["score"],
+        reverse=True
+    )
+    top = scores_sorted[0]
+    resp = {
+        "label": top["label"],
+        "score": round(top["score"], 4),
+        "scores": scores_sorted,
+        "model": HUGGINGFACE_MODEL,
+        "attempts": attempt
     }
 
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      localStorage.removeItem('user_id');
-      reflectAuthUI();
-      document.getElementById('loginMsg').textContent = '';
-      document.getElementById('signupMsg').textContent = '';
-      document.getElementById('submitMsg').textContent = '';
-    });
+    # Persist to the event row if provided
+    if event_id:
+        try:
+            conn = fGetConnection()
+            cur = conn.cursor()
+            cur.execute(
+                'UPDATE events SET ai_emotion = %s, ai_emotion_scores = %s WHERE id = %s',
+                (top["label"], json.dumps(scores_sorted), event_id)
+            )
+            conn.commit()
+            cur.close(); conn.close()
+        except Exception as e:
+            resp["persist_warning"] = f"Could not save ai_emotion: {e}"
 
-    async function downloadUntilReady(path, filename, btn) {
-      btn.disabled = true;
-      const originalText = btn.textContent;
-      btn.textContent = "Loading...";
-      while (true) {
-        try {
-          const res = await apiFetch(path);
-          if (res.ok) {
-            const blob = await res.blob();
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            a.click();
-            break;
-          }
-        } catch (e) { console.warn("Retrying after error:", e); }
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      btn.disabled = false;
-      btn.textContent = originalText;
-    }
+    return jsonify(resp), 200
 
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      downloadUntilReady(`/export/csv?user_id=${encodeURIComponent(userId)}`, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
-    });
 
-    const ctx = document.getElementById('triggerChart').getContext('2d');
-    triggerChart = new Chart(ctx, {
-      type: 'bar',
-      data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
-      options: { responsive: true, scales: { y: { beginAtZero: true } } }
-    document.getElementById('downloadPdfBtn').addEventListener('click', () => {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) { alert("Please log in first."); return; }
-      downloadUntilReady(`/export/pdf?user_id=${encodeURIComponent(userId)}`, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
-    });
-  }
-
-  // --- SIGNUP ---
-  document.getElementById('signupForm').addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const email = document.getElementById('signupEmail').value;
-    const password = document.getElementById('signupPassword').value;
-    const payload = { email, password };
-    try {
-      const res = await apiFetch('/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        localStorage.setItem('user_id', data.id);
-        document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-        reflectAuthUI(); loadAnalytics();
-      } else {
-        document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
-
-    function loadAnalytics() {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) {
-        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
-        return;
-      }
-    } catch { document.getElementById('signupMsg').textContent = "Network error."; }
-  });
-
-  // --- LOGIN ---
-  document.getElementById('loginForm').addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const email = document.getElementById('loginEmail').value;
-    const password = document.getElementById('loginPassword').value;
-    const payload = { email, password };
-    try {
-      const res = await apiFetch('/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      apiFetch(`/analytics?user_id=${encodeURIComponent(userId)}`)
-        .then(r => r.json())
-        .then(data => renderDashboard(data))
-        .catch(err => {
-          console.error(err);
-          document.getElementById('data-output').textContent = 'Error loading data';
-        });
-    }
-
-    function renderDashboard(data) {
-      document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
-      const dates = data.dailyCounts.map(entry => entry.date);
-      const counts = data.dailyCounts.map(entry => entry.count);
-      const labels = Object.keys(data.topTriggers);
-      const values = Object.values(data.topTriggers);
-
-      if (triggerChart) triggerChart.destroy();
-      if (dailyChart) dailyChart.destroy();
-      if (emotionChart) emotionChart.destroy();
-
-      const ctx2 = document.getElementById('dailyChart').getContext('2d');
-      dailyChart = new Chart(ctx2, {
-        type: 'line',
-        data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        localStorage.setItem('user_id', data.id);
-        document.getElementById('loginMsg').textContent = "Login successful!";
-        reflectAuthUI(); loadAnalytics();
-      } else {
-        document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
-      }
-    } catch { document.getElementById('loginMsg').textContent = "Network error."; }
-  });
-
-  // --- EVENT SUBMIT ---
-  document.getElementById('eventForm').addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const userId = localStorage.getItem('user_id');
-    const msgEl = document.getElementById('submitMsg');
-    const btn = this.querySelector('button[type="submit"]');
-    if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
-
-    const trigger = document.getElementById('trigger').value;
-    const compulsion = document.getElementById('compulsion').value;
-    const emotion = document.getElementById('emotion').value;
-    const notes = document.getElementById('notes').value;
-
-    const payload = {
-      user_id: userId,
-      timestamp: new Date().toISOString(),
-      trigger, compulsion, emotion, notes
-    };
-
-    // animated dots during analyze
-    let dotsTimer = null;
-    const startDots = (base="Analyzing") => {
-      let n = 0;
-      stopDots();
-      dotsTimer = setInterval(() => {
-        n = (n + 1) % 4;
-        msgEl.textContent = base + ".".repeat(n);
-      }, 400);
-    };
-    const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
-
-    try {
-      const oldBtnText = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = "Saving…";
-      msgEl.textContent = "Saving event…";
-
-      // Save event
-      const res = await apiFetch('/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-
-      const ctx = document.getElementById('triggerChart').getContext('2d');
-      triggerChart = new Chart(ctx, {
-        type: 'bar',
-        data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true } } }
-      });
-      if (!res.ok) {
-        msgEl.textContent = "Error logging event.";
-        btn.disabled = false; btn.textContent = oldBtnText;
-        return;
-      }
-
-      // If no notes, done
-      const notesTrim = (notes || "").trim();
-      if (!notesTrim) {
-        msgEl.textContent = "Event logged.";
-        btn.disabled = false; btn.textContent = oldBtnText;
-        loadAnalytics();
-        return;
-      // NEW: Emotion bar chart (AI)
-      if (data.aiEmotions) {
-        const emoLabels = Object.keys(data.aiEmotions);
-        const emoValues = Object.values(data.aiEmotions);
-        const ectx = document.getElementById('emotionChart').getContext('2d');
-        emotionChart = new Chart(ectx, {
-          type: 'bar',
-          data: { labels: emoLabels, datasets: [{ label: 'AI Emotions', data: emoValues, backgroundColor: 'rgba(255,159,64,0.7)' }] },
-          options: { responsive: true, scales: { y: { beginAtZero: true } } }
-        });
-      }
-    }
-
-    // --- SIGNUP ---
-    document.getElementById('signupForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const email = document.getElementById('signupEmail').value;
-      const password = document.getElementById('signupPassword').value;
-      const payload = { email, password };
-      try {
-        const res = await apiFetch('/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch { document.getElementById('signupMsg').textContent = "Network error."; }
-    });
-
-    // --- LOGIN ---
-    document.getElementById('loginForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const email = document.getElementById('loginEmail').value;
-      const password = document.getElementById('loginPassword').value;
-      const payload = { email, password };
-      try {
-        const res = await apiFetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          localStorage.setItem('user_id', data.id);
-          document.getElementById('loginMsg').textContent = "Login successful!";
-          reflectAuthUI(); loadAnalytics();
-        } else {
-          document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
-        }
-      } catch { document.getElementById('loginMsg').textContent = "Network error."; }
-    });
-
-    // --- EVENT SUBMIT (Emotion AI) ---
-    document.getElementById('eventForm').addEventListener('submit', async function (e) {
-      e.preventDefault();
-      const userId = localStorage.getItem('user_id');
-      const msgEl = document.getElementById('submitMsg');
-      const btn = this.querySelector('button[type="submit"]');
-      if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
-
-      const trigger = document.getElementById('trigger').value;
-      const compulsion = document.getElementById('compulsion').value;
-      const emotion = document.getElementById('emotion').value;
-      const notes = document.getElementById('notes').value;
-
-      const payload = {
-        user_id: userId,
-        timestamp: new Date().toISOString(),
-        trigger, compulsion, emotion, notes
-      };
-
-      // animated dots during analyze
-      let dotsTimer = null;
-      const startDots = (base="Analyzing emotions") => {
-        let n = 0;
-        stopDots();
-        dotsTimer = setInterval(() => {
-          n = (n + 1) % 4;
-          msgEl.textContent = base + ".".repeat(n);
-        }, 400);
-      };
-      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
-
-      // Analyze
-      btn.textContent = "Analyzing…";
-      startDots();
-      try {
-        const oldBtnText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Saving…";
-        msgEl.textContent = "Saving event…";
-
-      let j = {}, ok = false, err = "";
-      for (let attempt = 1; attempt <= 6; attempt++) {
-        const r = await apiFetch('/analyze', {
-        // 1) Save event
-        const res = await apiFetch('/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ notes: notesTrim })
-          body: JSON.stringify(payload)
-        });
-        try { j = await r.json(); } catch { j = {}; }
-        if (r.ok && (j.available || ("label" in j))) { ok = true; break; }
-        const saved = await res.json().catch(() => ({}));
-        if (!res.ok || !saved.id) {
-          msgEl.textContent = "Error logging event.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          return;
-        }
-
-        const reason = (j.reason || "").toLowerCase();
-        if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429")) {
-          await new Promise(s => setTimeout(s, 700 * attempt));
-          continue;
-        // 2) If no notes, done (no AI)
-        const notesTrim = (notes || "").trim();
-        if (!notesTrim) {
-          msgEl.textContent = "Event logged.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          loadAnalytics();
-          return;
-        }
-        err = j.reason || `HTTP ${r.status}`; break;
-      }
-
-      stopDots();
-      if (ok) {
-        msgEl.textContent = `Event logged. AI: ${j.label} (${Number(j.score ?? 0).toFixed(4)})`;
-      } else {
-        msgEl.textContent = `Event logged. AI still warming up…`;
-        console.log("Analyze debug:", j || err);
-      }
-        // 3) Analyze emotions + persist
-        btn.textContent = "Analyzing…";
-        startDots();
-
-        let j = {}, ok = false, err = "";
-        for (let attempt = 1; attempt <= 6; attempt++) {
-          const r = await apiFetch('/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
-          });
-          try { j = await r.json(); } catch { j = {}; }
-          if (r.ok && (j.scores && j.scores.length)) { ok = true; break; }
-
-          const reason = (j.reason || "").toLowerCase();
-          if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429") || reason.includes("hf_unavailable")) {
-            await new Promise(s => setTimeout(s, 700 * attempt));
-            continue;
-          }
-          err = j.reason || `HTTP ${r.status}`; break;
-        }
-
-      btn.disabled = false; btn.textContent = oldBtnText;
-      loadAnalytics();
-        stopDots();
-        if (ok) {
-          const top3 = j.scores.slice(0, 3).map(s => `${s.label} ${(s.score*100).toFixed(1)}%`).join(" • ");
-          msgEl.textContent = `Event logged. AI emotions: ${top3}`;
-        } else {
-          msgEl.textContent = `Event logged. AI still warming up…`;
-          console.log("Analyze debug:", j || err);
-        }
-
-    } catch (e2) {
-      stopDots();
-      msgEl.textContent = "Network error.";
-      btn.disabled = false; btn.textContent = "Log Event";
-    }
-  });
-        btn.disabled = false; btn.textContent = oldBtnText;
-        loadAnalytics();
-
-  // -------------------------------
-  // Init
-  // -------------------------------
-  reflectAuthUI();
-  checkBackend(); // status banner + readiness polling
-  if (localStorage.getItem('user_id')) loadAnalytics();
-</script>
-      } catch (e2) {
-        stopDots();
-        msgEl.textContent = "Network error.";
-        btn.disabled = false; btn.textContent = "Log Event";
-      }
-    });
-
-    // -------------------------------
-    // Init
-    // -------------------------------
-    reflectAuthUI();
-    checkBackend();
-    if (localStorage.getItem('user_id')) loadAnalytics();
-  </script>
-</body>
-</html>
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
