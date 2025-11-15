@@ -28,12 +28,56 @@ HUGGINGFACE_MODEL = os.getenv(
     "j-hartmann/emotion-english-distilroberta-base"  # default
 )
 
-# --- DB connection ---
+#DB connection
 def fGetConnection():
     conn_str = os.getenv("DATABASE_URL")
     if not conn_str:
         raise Exception("DATABASE_URL not set")
     return psycopg2.connect(conn_str)
+def fEnsureCoreSchema():
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.users (
+                id           uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+                email        text NOT NULL,
+                passwordhash text NOT NULL,
+                created_at   timestamptz DEFAULT now() NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.events (
+                id                 uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+                user_id            uuid NOT NULL,
+                "trigger"          text NOT NULL,
+                compulsion         text,
+                emotion            text,
+                notes              text,
+                "timestamp"        timestamptz DEFAULT now() NOT NULL,
+                ai_emotion         text,
+                ai_emotion_scores  jsonb
+            );
+        """)
+
+        try:
+            cur.execute("""
+                ALTER TABLE public.events
+                ADD CONSTRAINT IF NOT EXISTS events_user_fk
+                FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+            """)
+        except Exception:
+            pass
+
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[schema] {e}", flush=True)
 
 def fEnsureEventsSchema():
     """
@@ -55,12 +99,10 @@ def fEnsureEventsSchema():
         cur.close()
         conn.close()
     except Exception as e:
-        # Fail soft: analytics/AI are optional, the core app should still run.
-        # You can inspect logs on your hosting provider if needed.
         print(f"[schema] Warning: could not ensure events AI columns: {e}")
 
 
-# ---------------- Users ----------------
+# USERS
 @app.route("/users", methods=["POST"])
 def fPostUser():
     data = request.json or {}
@@ -111,7 +153,7 @@ def fLogin():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------------- Events ----------------
+# EVENTS
 @app.route('/events', methods=['POST'])
 def create_event():
     data = request.get_json() or {}
@@ -141,7 +183,7 @@ def create_event():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# ---------------- Analytics ----------------
+# Analytics
 @app.route('/analytics', methods=['GET'])
 def fGetAnalytics():
     sUserId = request.args.get('user_id')
@@ -194,7 +236,7 @@ def fGetAnalytics():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# ---------------- Exports ----------------
+# Exports
 @app.route('/export/csv', methods=['GET'])
 def fExportCSV():
     sUserId = request.args.get('user_id')
@@ -287,7 +329,7 @@ def fExportPDF():
     except Exception as e:
         return jsonify({'error': f'PDF error: {e}'}), 500
 
-# ---------------- Health ----------------
+# Health
 @app.route("/healthz", methods=["GET"])
 def fHealth():
     return jsonify({"status": "ok"}), 200
@@ -298,17 +340,28 @@ def fReady():
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("SELECT 1")
+        cur.close()
+        conn.close()
+
+        fEnsureCoreSchema()
+
+        return jsonify({"status": "ready"}), 200
+    except Exception as e:
+        return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
+def fReady():
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
         cur.close(); conn.close()
 
-        # Ensure optional AI columns exist on the events table so older
-        # databases work without manual ALTER TABLE steps.
         fEnsureEventsSchema()
 
         return jsonify({"status": "ready"}), 200
     except Exception as e:
         return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
 
-# ---------------- Analyze (Emotion AI) ----------------
+# Analyze (Emotions AI)
 @app.route("/analyze", methods=["POST"])
 def analyze():
     """
