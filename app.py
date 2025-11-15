@@ -362,84 +362,109 @@ def analyze():
     """
     Emotion detection for a note. Optionally persists to the event row.
     Request JSON: { notes: str, event_id?: str }
+    Response JSON: {
+      label: str,
+      score: float,
+      scores: [{label,score}, ...],
+      model: str,
+      attempts: int,
+      available?: bool,
+      reason?: str
+    }
     """
     data = request.get_json(force=True, silent=True) or {}
     notes = (data.get("notes") or "").strip()
     event_id = data.get("event_id")
+
     if not notes:
         return jsonify({"error": "notes required"}), 400
 
-    # No API key? Just skip real HF call and return stub.
-    if not HUGGINGFACE_API_KEY:
-        resp = {
-            "label": "unknown",
-            "score": 0.0,
-            "scores": [],
-            "model": HUGGINGFACE_MODEL,
-            "attempts": 0
-        }
-        if event_id:
-            try:
-                conn = fGetConnection()
-                cur = conn.cursor()
-                cur.execute(
-                    'UPDATE events SET ai_emotion = %s, ai_emotion_scores = %s WHERE id = %s',
-                    (resp["label"], json.dumps(resp["scores"]), event_id)
-                )
-                conn.commit()
-                cur.close()
-                conn.close()
-            except Exception as e:
-                resp["persist_warning"] = f"Could not save ai_emotion: {e}"
-        return jsonify(resp), 200
-
+    # Trim absurdly long input
     notes = notes[:500]
+
     url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"} if HUGGINGFACE_API_KEY else {}
     payload = {"inputs": notes}
 
-    max_attempts = 8
+    max_attempts = 6
     attempt = 0
     out_json = None
     last_err = None
 
-while attempt < max_attempts:
-    attempt += 1
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=15)
-
-        # Don't retry permanent client errors (401/403/404/410)
-        if r.status_code in (401, 403, 404, 410):
-            last_err = f"hf_client_error {r.status_code}: {r.text[:200]}"
-            break
-
-        # Retry temporary issues
-        if r.status_code in (429, 503):
-            last_err = f"hf_retryable {r.status_code}: {r.text[:200]}"
-            time.sleep(min(1.5 * attempt, 8))
+    while attempt < max_attempts:
+        attempt += 1
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=12)
+        except Exception as e:
+            # True network error (DNS, connection reset, etc.)
+            last_err = e
+            time.sleep(min(1.0 * attempt, 5))
             continue
 
-        r.raise_for_status()
-        out_json = r.json()
+        # Transient "model is loading" case → retry with backoff
+        if r.status_code == 503:
+            last_err = f"503: {r.text[:200]}"
+            time.sleep(min(1.0 * attempt, 5))
+            continue
+
+        # For *non*-503 errors (401, 403, 410, 429, 500 etc) we FAIL FAST
+        if r.status_code >= 400:
+            try:
+                err_body = r.json()
+            except Exception:
+                err_body = r.text[:200]
+            return jsonify({
+                "available": False,
+                "reason": f"hf_http_{r.status_code}",
+                "details": err_body,
+                "model": HUGGINGFACE_MODEL
+            }), 502
+
+        # Success path
+        try:
+            out_json = r.json()
+        except Exception as e:
+            last_err = e
+            break
         break
 
-    except Exception as e:
-        last_err = e
-        time.sleep(min(1.5 * attempt, 8))
-        continue
     if out_json is None:
-        return jsonify({"available": False, "reason": f"hf_unavailable: {last_err}"}), 503
+        return jsonify({
+            "available": False,
+            "reason": f"hf_unavailable: {last_err}",
+            "model": HUGGINGFACE_MODEL
+        }), 503
 
     # HF may return [[...]] or [...]
-    seq = out_json[0] if (isinstance(out_json, list) and out_json and isinstance(out_json[0], list)) else out_json
+    if isinstance(out_json, list) and out_json and isinstance(out_json[0], list):
+        seq = out_json[0]
+    else:
+        seq = out_json
+
     if not isinstance(seq, list) or not seq:
-        return jsonify({"available": False, "reason": "unexpected_response"}), 502
+        return jsonify({
+            "available": False,
+            "reason": "unexpected_response",
+            "raw": out_json
+        }), 502
 
     scores_sorted = sorted(
-        [{"label": s.get("label"), "score": float(s.get("score", 0.0))} for s in seq if "label" in s],
+        [
+            {"label": s.get("label"), "score": float(s.get("score", 0.0))}
+            for s in seq
+            if "label" in s
+        ],
         key=lambda x: x["score"],
         reverse=True
     )
+
+    if not scores_sorted:
+        return jsonify({
+            "available": False,
+            "reason": "no_scores",
+            "raw": out_json
+        }), 502
+
     top = scores_sorted[0]
     resp = {
         "label": top["label"],
@@ -465,6 +490,7 @@ while attempt < max_attempts:
             resp["persist_warning"] = f"Could not save ai_emotion: {e}"
 
     return jsonify(resp), 200
+
 
 
 if __name__ == "__main__":
