@@ -21,8 +21,8 @@ app = Flask(__name__)
 bcrypt = Bcrypt(app)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
-# --- Hugging Face Emotion model (better than sentiment) ---
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+# --- Hugging Face Emotion model---
+HUGGINGFACE_API_KEY = os.getenv("")
 HUGGINGFACE_MODEL = os.getenv(
     "HUGGINGFACE_MODEL",
     "j-hartmann/emotion-english-distilroberta-base"  # default
@@ -34,6 +34,31 @@ def fGetConnection():
     if not conn_str:
         raise Exception("DATABASE_URL not set")
     return psycopg2.connect(conn_str)
+
+def fEnsureEventsSchema():
+    """
+    Ensure the events table has the optional AI columns used by the app.
+    This lets older databases (like those restored from an earlier dump)
+    work without manual ALTER TABLE statements.
+    """
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            ALTER TABLE public.events
+                ADD COLUMN IF NOT EXISTS ai_emotion text,
+                ADD COLUMN IF NOT EXISTS ai_emotion_scores jsonb
+            """
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        # Fail soft: analytics/AI are optional, the core app should still run.
+        # You can inspect logs on your hosting provider if needed.
+        print(f"[schema] Warning: could not ensure events AI columns: {e}")
+
 
 # ---------------- Users ----------------
 @app.route("/users", methods=["POST"])
@@ -149,7 +174,7 @@ def fGetAnalytics():
         date_rows = cur.fetchall()
         daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
 
-        # NEW: AI emotion distribution
+        # AI emotion distribution
         cur.execute("""
             SELECT ai_emotion, COUNT(*) AS c
             FROM events
@@ -274,6 +299,11 @@ def fReady():
         cur = conn.cursor()
         cur.execute("SELECT 1")
         cur.close(); conn.close()
+
+        # Ensure optional AI columns exist on the events table so older
+        # databases work without manual ALTER TABLE steps.
+        fEnsureEventsSchema()
+
         return jsonify({"status": "ready"}), 200
     except Exception as e:
         return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
