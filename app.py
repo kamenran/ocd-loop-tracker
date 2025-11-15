@@ -39,45 +39,35 @@ def fEnsureCoreSchema():
         conn = fGetConnection()
         cur = conn.cursor()
 
-        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;")
-
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.users (
-                id           uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-                email        text NOT NULL,
+                id uuid PRIMARY KEY,
+                email text NOT NULL,
                 passwordhash text NOT NULL,
-                created_at   timestamptz DEFAULT now() NOT NULL
+                created_at timestamptz NOT NULL
             );
         """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.events (
-                id                 uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-                user_id            uuid NOT NULL,
-                "trigger"          text NOT NULL,
-                compulsion         text,
-                emotion            text,
-                notes              text,
-                "timestamp"        timestamptz DEFAULT now() NOT NULL,
-                ai_emotion         text,
-                ai_emotion_scores  jsonb
+                id uuid PRIMARY KEY,
+                user_id uuid NOT NULL,
+                "trigger" text NOT NULL,
+                compulsion text,
+                emotion text,
+                notes text,
+                "timestamp" timestamptz NOT NULL,
+                ai_emotion text,
+                ai_emotion_scores jsonb
             );
         """)
-
-        try:
-            cur.execute("""
-                ALTER TABLE public.events
-                ADD CONSTRAINT IF NOT EXISTS events_user_fk
-                FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-            """)
-        except Exception:
-            pass
 
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
         print(f"[schema] {e}", flush=True)
+
 
 def fEnsureEventsSchema():
     """
@@ -116,6 +106,8 @@ def fPostUser():
     dtCreatedAt = datetime.utcnow()
 
     try:
+        fEnsureCoreSchema()
+
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("""
@@ -123,10 +115,12 @@ def fPostUser():
             VALUES (%s, %s, %s, %s)
         """, (sId, sEmail, sPasswordHash, dtCreatedAt))
         conn.commit()
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
         return jsonify({"id": sId}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/login", methods=["POST"])
 def fLogin():
@@ -348,6 +342,7 @@ def fReady():
         return jsonify({"status": "ready"}), 200
     except Exception as e:
         return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
+
 def fReady():
     try:
         conn = fGetConnection()
