@@ -91,7 +91,6 @@
       <h2>Analytics</h2>
       <canvas id="triggerChart" height="300"></canvas>
       <canvas id="dailyChart" height="300"></canvas>
-      <!-- NEW: Emotion chart -->
       <canvas id="emotionChart" height="300"></canvas>
       <pre id="data-output">Loading...</pre>
     </div>
@@ -288,7 +287,7 @@
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
-      // NEW: Emotion bar chart (AI)
+      // Emotion bar chart (AI)
       if (data.aiEmotions) {
         const emoLabels = Object.keys(data.aiEmotions);
         const emoValues = Object.values(data.aiEmotions);
@@ -317,11 +316,14 @@
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
           document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
-          reflectAuthUI(); loadAnalytics();
+          reflectAuthUI();
+          loadAnalytics();
         } else {
           document.getElementById('signupMsg').textContent = "Signup failed: " + (data.error || `HTTP ${res.status}`);
         }
-      } catch { document.getElementById('signupMsg').textContent = "Network error."; }
+      } catch {
+        document.getElementById('signupMsg').textContent = "Network error.";
+      }
     });
 
     // --- LOGIN ---
@@ -340,35 +342,43 @@
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
           document.getElementById('loginMsg').textContent = "Login successful!";
-          reflectAuthUI(); loadAnalytics();
+          reflectAuthUI();
+          loadAnalytics();
         } else {
           document.getElementById('loginMsg').textContent = "Login failed: " + (data.error || `HTTP ${res.status}`);
         }
-      } catch { document.getElementById('loginMsg').textContent = "Network error."; }
+      } catch {
+        document.getElementById('loginMsg').textContent = "Network error.";
+      }
     });
 
-    // --- EVENT SUBMIT (Emotion AI) ---
+    // --- EVENT SUBMIT (robust: logging independent of AI) ---
     document.getElementById('eventForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const userId = localStorage.getItem('user_id');
       const msgEl = document.getElementById('submitMsg');
       const btn = this.querySelector('button[type="submit"]');
-      if (!userId) { msgEl.textContent = "No user ID found. Please sign up or log in first."; return; }
+      if (!userId) {
+        msgEl.textContent = "No user ID found. Please sign up or log in first.";
+        return;
+      }
 
-      const trigger = document.getElementById('trigger').value;
+      const trigger    = document.getElementById('trigger').value;
       const compulsion = document.getElementById('compulsion').value;
-      const emotion = document.getElementById('emotion').value;
-      const notes = document.getElementById('notes').value;
+      const emotion    = document.getElementById('emotion').value;
+      const notes      = document.getElementById('notes').value;
 
       const payload = {
         user_id: userId,
         timestamp: new Date().toISOString(),
-        trigger, compulsion, emotion, notes
+        trigger,
+        compulsion,
+        emotion,
+        notes
       };
 
-      // animated dots during analyze
       let dotsTimer = null;
-      const startDots = (base="Analyzing emotions") => {
+      const startDots = (base = "Analyzing emotions") => {
         let n = 0;
         stopDots();
         dotsTimer = setInterval(() => {
@@ -376,37 +386,47 @@
           msgEl.textContent = base + ".".repeat(n);
         }, 400);
       };
-      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
+      const stopDots = () => {
+        if (dotsTimer) {
+          clearInterval(dotsTimer);
+          dotsTimer = null;
+        }
+      };
+
+      const oldBtnText = btn.textContent;
 
       try {
-        const oldBtnText = btn.textContent;
+        // 1) Save event
         btn.disabled = true;
         btn.textContent = "Saving…";
         msgEl.textContent = "Saving event…";
 
-        // 1) Save event
         const res = await apiFetch('/events', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const saved = await res.json().catch(() => ({}));
+
         if (!res.ok || !saved.id) {
           msgEl.textContent = "Error logging event.";
-          btn.disabled = false; btn.textContent = oldBtnText;
+          btn.disabled = false;
+          btn.textContent = oldBtnText;
           return;
         }
 
-        // 2) If no notes, done (no AI)
+        // Event IS now in DB – refresh charts immediately
+        loadAnalytics();
+
         const notesTrim = (notes || "").trim();
         if (!notesTrim) {
           msgEl.textContent = "Event logged.";
-          btn.disabled = false; btn.textContent = oldBtnText;
-          loadAnalytics();
+          btn.disabled = false;
+          btn.textContent = oldBtnText;
           return;
         }
 
-        // 3) Analyze emotions + persist
+        // 2) AI emotions (best effort, doesn't affect logging)
         btn.textContent = "Analyzing…";
         startDots();
 
@@ -418,32 +438,49 @@
             body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
           });
           try { j = await r.json(); } catch { j = {}; }
-          if (r.ok && (j.scores && j.scores.length)) { ok = true; break; }
+
+          if (r.ok && j.scores && j.scores.length) {
+            ok = true;
+            break;
+          }
 
           const reason = (j.reason || "").toLowerCase();
-          if (reason.includes("503") || reason.includes("warm") || reason.includes("network") || reason.includes("429") || reason.includes("hf_unavailable")) {
+          if (
+            reason.includes("503") ||
+            reason.includes("warm") ||
+            reason.includes("network") ||
+            reason.includes("429") ||
+            reason.includes("hf_unavailable") ||
+            reason.includes("no_api_key")
+          ) {
             await new Promise(s => setTimeout(s, 700 * attempt));
             continue;
           }
-          err = j.reason || `HTTP ${r.status}`; break;
+
+          err = j.reason || `HTTP ${r.status}`;
+          break;
         }
 
         stopDots();
+
         if (ok) {
-          const top3 = j.scores.slice(0, 3).map(s => `${s.label} ${(s.score*100).toFixed(1)}%`).join(" • ");
+          const top3 = j.scores
+            .slice(0, 3)
+            .map(s => `${s.label} ${(s.score * 100).toFixed(1)}%`)
+            .join(" • ");
           msgEl.textContent = `Event logged. AI emotions: ${top3}`;
         } else {
-          msgEl.textContent = `Event logged. AI still warming up…`;
+          msgEl.textContent = "Event logged. AI still warming up or unavailable.";
           console.log("Analyze debug:", j || err);
         }
 
-        btn.disabled = false; btn.textContent = oldBtnText;
-        loadAnalytics();
-
       } catch (e2) {
         stopDots();
-        msgEl.textContent = "Network error.";
-        btn.disabled = false; btn.textContent = "Log Event";
+        console.error(e2);
+        msgEl.textContent = "Event logged, but emotion analysis hit a network error. Check Analytics/Export to confirm.";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = oldBtnText;
       }
     });
 

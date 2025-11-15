@@ -21,19 +21,62 @@ app = Flask(__name__)
 bcrypt = Bcrypt(app)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
-# --- Hugging Face Emotion model (better than sentiment) ---
+# --- Hugging Face Emotion model ---
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HUGGINGFACE_MODEL = os.getenv(
     "HUGGINGFACE_MODEL",
     "j-hartmann/emotion-english-distilroberta-base"  # default
 )
 
-# --- DB connection ---
+
+# ---------------- DB connection / schema ----------------
 def fGetConnection():
     conn_str = os.getenv("DATABASE_URL")
     if not conn_str:
         raise Exception("DATABASE_URL not set")
     return psycopg2.connect(conn_str)
+
+
+def fEnsureCoreSchema():
+    """
+    Create core tables if they don't exist (users, events).
+    Safe to call multiple times.
+    """
+    try:
+        conn = fGetConnection()
+        cur = conn.cursor()
+
+        # users table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.users (
+                id uuid PRIMARY KEY,
+                email text NOT NULL,
+                passwordhash text NOT NULL,
+                created_at timestamptz NOT NULL
+            );
+        """)
+
+        # events table (with AI columns)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.events (
+                id uuid PRIMARY KEY,
+                user_id uuid NOT NULL,
+                "trigger" text NOT NULL,
+                compulsion text,
+                emotion text,
+                notes text,
+                "timestamp" timestamptz NOT NULL,
+                ai_emotion text,
+                ai_emotion_scores jsonb
+            );
+        """)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[schema] {e}", flush=True)
+
 
 # ---------------- Users ----------------
 @app.route("/users", methods=["POST"])
@@ -49,6 +92,9 @@ def fPostUser():
     dtCreatedAt = datetime.utcnow()
 
     try:
+        # make sure tables exist
+        fEnsureCoreSchema()
+
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("""
@@ -56,10 +102,12 @@ def fPostUser():
             VALUES (%s, %s, %s, %s)
         """, (sId, sEmail, sPasswordHash, dtCreatedAt))
         conn.commit()
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
         return jsonify({"id": sId}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/login", methods=["POST"])
 def fLogin():
@@ -70,11 +118,14 @@ def fLogin():
         return jsonify({"error": "Missing fields"}), 400
 
     try:
+        fEnsureCoreSchema()
+
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("SELECT id, passwordhash FROM users WHERE email = %s", (sEmail,))
         row = cur.fetchone()
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
 
         if not row:
             return jsonify({"error": "User not found"}), 404
@@ -85,6 +136,7 @@ def fLogin():
         return jsonify({"error": "Invalid password"}), 401
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------- Events ----------------
 @app.route('/events', methods=['POST'])
@@ -101,20 +153,24 @@ def create_event():
         return jsonify({'error': 'Missing required fields'}), 400
 
     try:
+        fEnsureCoreSchema()
+
         conn = fGetConnection()
         cur = conn.cursor()
         new_id = str(uuid.uuid4())
         cur.execute("""
-            INSERT INTO events (id, user_id, "trigger", compulsion, emotion, notes, timestamp)
+            INSERT INTO events (id, user_id, "trigger", compulsion, emotion, notes, "timestamp")
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (new_id, user_id, trigger, compulsion, emotion, notes, timestamp))
         new_id = cur.fetchone()[0]
         conn.commit()
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
         return jsonify({'id': str(new_id)}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 # ---------------- Analytics ----------------
 @app.route('/analytics', methods=['GET'])
@@ -140,16 +196,16 @@ def fGetAnalytics():
 
         # Daily counts
         cur.execute("""
-            SELECT DATE(timestamp) AS date, COUNT(*) AS count
+            SELECT DATE("timestamp") AS date, COUNT(*) AS count
             FROM events
             WHERE user_id = %s
-            GROUP BY DATE(timestamp)
+            GROUP BY DATE("timestamp")
             ORDER BY date ASC;
         """, (sUserId,))
         date_rows = cur.fetchall()
         daily_counts = [{"date": row[0].isoformat(), "count": row[1]} for row in date_rows]
 
-        # NEW: AI emotion distribution
+        # AI emotion distribution
         cur.execute("""
             SELECT ai_emotion, COUNT(*) AS c
             FROM events
@@ -160,14 +216,16 @@ def fGetAnalytics():
         ai_rows = cur.fetchall()
         ai_emotions = {row[0]: row[1] for row in ai_rows}
 
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
         return jsonify({
             "topTriggers": top_triggers,
             "dailyCounts": daily_counts,
-            "aiEmotions": ai_emotions,  # for emotion chart
+            "aiEmotions": ai_emotions,
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 # ---------------- Exports ----------------
 @app.route('/export/csv', methods=['GET'])
@@ -179,14 +237,15 @@ def fExportCSV():
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp, ai_emotion
+            SELECT id, user_id, "trigger", compulsion, emotion, notes, "timestamp", ai_emotion
             FROM events
             WHERE user_id = %s
-            ORDER BY timestamp ASC;
+            ORDER BY "timestamp" ASC;
         """, (sUserId,))
         rows = cur.fetchall()
         colnames = [desc[0] for desc in cur.description]
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
 
         output = io.StringIO()
         writer = csv.writer(output)
@@ -199,6 +258,7 @@ def fExportCSV():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 @app.route('/export/pdf', methods=['GET'])
 def fExportPDF():
     sUserId = request.args.get('user_id')
@@ -208,14 +268,15 @@ def fExportPDF():
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, user_id, "trigger", compulsion, emotion, notes, timestamp, ai_emotion
+            SELECT id, user_id, "trigger", compulsion, emotion, notes, "timestamp", ai_emotion
             FROM events
             WHERE user_id = %s
-            ORDER BY timestamp ASC;
+            ORDER BY "timestamp" ASC;
         """, (sUserId,))
         rows = cur.fetchall()
         colnames = [desc[0] for desc in cur.description]
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
     except Exception as e:
         return jsonify({'error': f'DB error: {e}'}), 500
 
@@ -262,10 +323,12 @@ def fExportPDF():
     except Exception as e:
         return jsonify({'error': f'PDF error: {e}'}), 500
 
+
 # ---------------- Health ----------------
 @app.route("/healthz", methods=["GET"])
 def fHealth():
     return jsonify({"status": "ok"}), 200
+
 
 @app.route("/readyz", methods=["GET"])
 def fReady():
@@ -273,10 +336,16 @@ def fReady():
         conn = fGetConnection()
         cur = conn.cursor()
         cur.execute("SELECT 1")
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
+
+        # ensure schema exists
+        fEnsureCoreSchema()
+
         return jsonify({"status": "ready"}), 200
     except Exception as e:
         return jsonify({"status": "starting", "reason": str(e)[:160]}), 503
+
 
 # ---------------- Analyze (Emotion AI) ----------------
 @app.route("/analyze", methods=["POST"])
@@ -284,13 +353,6 @@ def analyze():
     """
     Emotion detection for a note. Optionally persists to the event row.
     Request JSON: { notes: str, event_id?: str }
-    Response JSON: {
-      label: str,
-      score: float,
-      scores: [{label,score}, ...],
-      model: str,
-      attempts: int
-    }
     """
     data = request.get_json(force=True, silent=True) or {}
     notes = (data.get("notes") or "").strip()
@@ -298,9 +360,20 @@ def analyze():
     if not notes:
         return jsonify({"error": "notes required"}), 400
 
+    # If no API key configured, don't blow up – just return "unavailable"
+    if not HUGGINGFACE_API_KEY:
+        return jsonify({
+            "available": False,
+            "reason": "no_api_key",
+            "scores": [],
+            "label": None,
+            "model": HUGGINGFACE_MODEL,
+            "attempts": 0
+        }), 200
+
     notes = notes[:500]
     url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"} if HUGGINGFACE_API_KEY else {}
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
     payload = {"inputs": notes}
 
     max_attempts = 8
@@ -355,7 +428,8 @@ def analyze():
                 (top["label"], json.dumps(scores_sorted), event_id)
             )
             conn.commit()
-            cur.close(); conn.close()
+            cur.close()
+            conn.close()
         except Exception as e:
             resp["persist_warning"] = f"Could not save ai_emotion: {e}"
 
