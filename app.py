@@ -26,7 +26,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HUGGINGFACE_MODEL = os.getenv(
     "HUGGINGFACE_MODEL",
-    "j-hartmann/emotion-english-distilroberta-base"  # default
+    "SamLowe/roberta-base-go_emotions"  # default
 )
 
 
@@ -403,21 +403,30 @@ def analyze():
     out_json = None
     last_err = None
 
-    while attempt < max_attempts:
-        attempt += 1
-        try:
-            r = requests.post(url, headers=headers, json=payload, timeout=15)
-            if r.status_code == 503:
-                time.sleep(min(1.5 * attempt, 8))
-                continue
-            r.raise_for_status()
-            out_json = r.json()
+while attempt < max_attempts:
+    attempt += 1
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+
+        # Don't retry permanent client errors (401/403/404/410)
+        if r.status_code in (401, 403, 404, 410):
+            last_err = f"hf_client_error {r.status_code}: {r.text[:200]}"
             break
-        except Exception as e:
-            last_err = e
+
+        # Retry temporary issues
+        if r.status_code in (429, 503):
+            last_err = f"hf_retryable {r.status_code}: {r.text[:200]}"
             time.sleep(min(1.5 * attempt, 8))
             continue
 
+        r.raise_for_status()
+        out_json = r.json()
+        break
+
+    except Exception as e:
+        last_err = e
+        time.sleep(min(1.5 * attempt, 8))
+        continue
     if out_json is None:
         return jsonify({"available": False, "reason": f"hf_unavailable: {last_err}"}), 503
 
