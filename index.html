@@ -6,22 +6,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body { font-family: 'Segoe UI', Roboto, sans-serif; background: #f9fafc; color: #2C3E50; line-height: 1.5; margin: 0; padding: 20px; }
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background: #f9fafc;
+      color: #2C3E50;
+      line-height: 1.5;
+      margin: 0;
+      padding: 20px;
+    }
     .container { max-width: 900px; margin: auto; }
     header { text-align: center; margin-bottom: 30px; }
     h1 { color: #1ABC9C; margin-bottom: 8px; }
     h2 { color: #34495E; margin-top: 0; }
-    .card { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-    label { display: block; margin: 10px 0 5px; font-weight: 500; }
-    input, textarea, button { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    label {
+      display: block;
+      margin: 10px 0 5px;
+      font-weight: 500;
+    }
+    input, textarea, button {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-bottom: 12px;
+      box-sizing: border-box;
+    }
     textarea { resize: vertical; }
-    button { background: #1ABC9C; color: white; border: none; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+    button {
+      background: #1ABC9C;
+      color: white;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
     button:hover { background: #16a085; }
     button:disabled { background: #95a5a6; cursor: not-allowed; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; }
     p.msg { font-size: 14px; margin-top: -8px; margin-bottom: 10px; }
-    footer { text-align: center; font-size: 13px; color: #7f8c8d; margin-top: 30px; }
-    @media (max-width: 600px) { body { padding: 15px; } .actions { flex-direction: column; } }
+    footer {
+      text-align: center;
+      font-size: 13px;
+      color: #7f8c8d;
+      margin-top: 30px;
+    }
+    @media (max-width: 600px) {
+      body { padding: 15px; }
+      .actions { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
@@ -31,14 +71,12 @@
       <p>Your personal dashboard for tracking and reflection</p>
     </header>
 
-    <!-- Backend status banner -->
     <div id="backendStatus" style="display:none; margin-bottom:12px;">
       <div style="background:#fff3cd;border:1px solid #ffeeba;color:#856404;padding:10px;border-radius:8px;">
         <span id="backendStatusText">Contacting server…</span>
       </div>
     </div>
 
-    <!-- SIGN UP -->
     <div class="card">
       <h2>Sign Up</h2>
       <form id="signupForm">
@@ -51,7 +89,6 @@
       <p id="signupMsg" class="msg"></p>
     </div>
 
-    <!-- LOGIN -->
     <div class="card">
       <h2>Log In</h2>
       <form id="loginForm">
@@ -69,7 +106,6 @@
       </div>
     </div>
 
-    <!-- EVENT FORM -->
     <div class="card">
       <h2>Log a New Event</h2>
       <form id="eventForm">
@@ -86,7 +122,6 @@
       <p id="submitMsg" class="msg" aria-live="polite"></p>
     </div>
 
-    <!-- CHARTS -->
     <div class="card">
       <h2>Analytics</h2>
       <canvas id="triggerChart" height="300"></canvas>
@@ -101,26 +136,29 @@
   </div>
 
   <script>
-    // Config
     const API_BASE =
-      (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
+      (location.hostname === "localhost" ||
+       location.hostname === "127.0.0.1" ||
+       location.protocol === "file:")
         ? "http://127.0.0.1:5000"
         : "https://ocd-loop-tracker.onrender.com";
 
     const api = (path) => `${API_BASE}${path}`;
 
-    // Backend status
     const $status = document.getElementById('backendStatus');
     const $statusText = document.getElementById('backendStatusText');
 
     function showStatus(msg, color="#856404", bg="#fff3cd", border="#ffeeba") {
       $status.style.display = 'block';
-      $status.firstElementChild.style.color = color;
-      $status.firstElementChild.style.background = bg;
-      $status.firstElementChild.style.borderColor = border;
+      const box = $status.firstElementChild;
+      box.style.color = color;
+      box.style.background = bg;
+      box.style.borderColor = border;
       $statusText.textContent = msg;
     }
-    function hideStatus() { $status.style.display = 'none'; }
+    function hideStatus() {
+      $status.style.display = 'none';
+    }
 
     let BACKEND_READY = false;
     let readyPoll = null;
@@ -128,7 +166,10 @@
     function markBackendReady() {
       if (BACKEND_READY) return;
       BACKEND_READY = true;
-      if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
+      if (readyPoll) {
+        clearInterval(readyPoll);
+        readyPoll = null;
+      }
       showStatus("Server ready", "#155724", "#d4edda", "#c3e6cb");
       setTimeout(hideStatus, 1200);
     }
@@ -143,9 +184,14 @@
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal, cache: "no-store" });
+        const res = await fetch(`${API_BASE}${path}`, {
+          signal: ctrl.signal,
+          cache: "no-store"
+        });
         return res;
-      } finally { clearTimeout(t); }
+      } finally {
+        clearTimeout(t);
+      }
     }
 
     async function checkBackend() {
@@ -159,10 +205,16 @@
           if (r.ok) { up = true; break; }
         } catch {}
       }
-      if (!up) showStatus("Waking the server… (Render free tier may take ~30–60s)");
+      if (!up) {
+        showStatus("Waking the server…");
+      }
 
       readyPoll = setInterval(async () => {
-        if (BACKEND_READY) { clearInterval(readyPoll); readyPoll = null; return; }
+        if (BACKEND_READY) {
+          clearInterval(readyPoll);
+          readyPoll = null;
+          return;
+        }
         try {
           const r = await ping('/readyz', { timeoutMs: 5000 });
           if (r.ok) {
@@ -175,11 +227,10 @@
         const elapsed = Math.round((Date.now() - t0) / 1000);
         if (elapsed < 10) showStatus(`Waking the server… (${elapsed}s)`);
         else if (elapsed < 25) showStatus(`Starting up… (${elapsed}s)`);
-        else showStatus(`Almost there (cold start)… (${elapsed}s)`);
+        else showStatus(`Almost there… (${elapsed}s)`);
       }, 2500);
     }
 
-    // Charts
     let triggerChart = null;
     let dailyChart = null;
     let emotionChart = null;
@@ -193,7 +244,10 @@
       document.getElementById('logoutBtn').style.display = authed ? 'inline-block' : 'none';
       document.getElementById('downloadCsvBtn').style.display = authed ? 'inline-block' : 'none';
       document.getElementById('downloadPdfBtn').style.display = authed ? 'inline-block' : 'none';
-      if (!authed) document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+      if (!authed) {
+        document.getElementById('data-output').textContent =
+          'Please log in or sign up first.';
+      }
     }
 
     document.getElementById('logoutBtn').addEventListener('click', () => {
@@ -231,19 +285,28 @@
     document.getElementById('downloadCsvBtn').addEventListener('click', () => {
       const userId = localStorage.getItem('user_id');
       if (!userId) { alert("Please log in first."); return; }
-      downloadUntilReady(`/export/csv?user_id=${encodeURIComponent(userId)}`, `events_${userId}.csv`, document.getElementById('downloadCsvBtn'));
+      downloadUntilReady(
+        `/export/csv?user_id=${encodeURIComponent(userId)}`,
+        `events_${userId}.csv`,
+        document.getElementById('downloadCsvBtn')
+      );
     });
 
     document.getElementById('downloadPdfBtn').addEventListener('click', () => {
       const userId = localStorage.getItem('user_id');
       if (!userId) { alert("Please log in first."); return; }
-      downloadUntilReady(`/export/pdf?user_id=${encodeURIComponent(userId)}`, `events_${userId}.pdf`, document.getElementById('downloadPdfBtn'));
+      downloadUntilReady(
+        `/export/pdf?user_id=${encodeURIComponent(userId)}`,
+        `events_${userId}.pdf`,
+        document.getElementById('downloadPdfBtn')
+      );
     });
 
     function loadAnalytics() {
       const userId = localStorage.getItem('user_id');
       if (!userId) {
-        document.getElementById('data-output').textContent = 'Please log in or sign up first.';
+        document.getElementById('data-output').textContent =
+          'Please log in or sign up first.';
         return;
       }
       apiFetch(`/analytics?user_id=${encodeURIComponent(userId)}`)
@@ -256,11 +319,13 @@
     }
 
     function renderDashboard(data) {
-      document.getElementById('data-output').textContent = JSON.stringify(data, null, 2);
+      document.getElementById('data-output').textContent =
+        JSON.stringify(data, null, 2);
+
       const dates = data.dailyCounts.map(entry => entry.date);
       const counts = data.dailyCounts.map(entry => entry.count);
-      const labels = Object.keys(data.topTriggers);
-      const values = Object.values(data.topTriggers);
+      const labels = Object.keys(data.topTriggers || {});
+      const values = Object.values(data.topTriggers || {});
 
       if (triggerChart) triggerChart.destroy();
       if (dailyChart) dailyChart.destroy();
@@ -269,14 +334,29 @@
       const ctx2 = document.getElementById('dailyChart').getContext('2d');
       dailyChart = new Chart(ctx2, {
         type: 'line',
-        data: { labels: dates, datasets: [{ label: 'Entries per Day', data: counts, borderColor: 'rgba(54,162,235,1)', fill: false }] },
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Entries per Day',
+            data: counts,
+            borderColor: 'rgba(54,162,235,1)',
+            fill: false
+          }]
+        },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
       const ctx = document.getElementById('triggerChart').getContext('2d');
       triggerChart = new Chart(ctx, {
         type: 'bar',
-        data: { labels: labels, datasets: [{ label: 'Trigger Frequency', data: values, backgroundColor: 'rgba(75,192,192,0.7)' }] },
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Trigger Frequency',
+            data: values,
+            backgroundColor: 'rgba(75,192,192,0.7)'
+          }]
+        },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
@@ -286,13 +366,20 @@
         const ectx = document.getElementById('emotionChart').getContext('2d');
         emotionChart = new Chart(ectx, {
           type: 'bar',
-          data: { labels: emoLabels, datasets: [{ label: 'AI Emotions', data: emoValues, backgroundColor: 'rgba(255,159,64,0.7)' }] },
+          data: {
+            labels: emoLabels,
+            datasets: [{
+              label: 'AI Emotions',
+              data: emoValues,
+              backgroundColor: 'rgba(255,159,64,0.7)'
+            }]
+          },
           options: { responsive: true, scales: { y: { beginAtZero: true } } }
         });
       }
     }
 
-    // SIGNUP
+    // Signup
     document.getElementById('signupForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('signupEmail').value;
@@ -307,7 +394,8 @@
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
-          document.getElementById('signupMsg').textContent = "Signup successful! Your ID is saved.";
+          document.getElementById('signupMsg').textContent =
+            "Signup successful. Your ID is saved.";
           reflectAuthUI();
           loadAnalytics();
         } else {
@@ -319,7 +407,7 @@
       }
     });
 
-    // LOGIN
+    // Login
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value;
@@ -334,7 +422,7 @@
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           localStorage.setItem('user_id', data.id);
-          document.getElementById('loginMsg').textContent = "Login successful!";
+          document.getElementById('loginMsg').textContent = "Login successful.";
           reflectAuthUI();
           loadAnalytics();
         } else {
@@ -346,14 +434,15 @@
       }
     });
 
-    // EVENT SUBMIT
+    // Event + emotion
     document.getElementById('eventForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       const userId = localStorage.getItem('user_id');
       const msgEl = document.getElementById('submitMsg');
       const btn = this.querySelector('button[type="submit"]');
+
       if (!userId) {
-        msgEl.textContent = "No user ID found. Please sign up or log in first.";
+        msgEl.textContent = "No user ID. Please sign up or log in first.";
         return;
       }
 
@@ -365,12 +454,14 @@
       const payload = {
         user_id: userId,
         timestamp: new Date().toISOString(),
-        trigger, compulsion, emotion, notes
+        trigger,
+        compulsion,
+        emotion,
+        notes
       };
 
-      // dots helper
       let dotsTimer = null;
-      const startDots = (base="Analyzing emotions") => {
+      const startDots = (base = "Analyzing emotions") => {
         let n = 0;
         stopDots();
         dotsTimer = setInterval(() => {
@@ -378,7 +469,12 @@
           msgEl.textContent = base + ".".repeat(n);
         }, 400);
       };
-      const stopDots = () => { if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null; } };
+      const stopDots = () => {
+        if (dotsTimer) {
+          clearInterval(dotsTimer);
+          dotsTimer = null;
+        }
+      };
 
       try {
         const oldBtnText = btn.textContent;
@@ -386,7 +482,7 @@
         btn.textContent = "Saving…";
         msgEl.textContent = "Saving event…";
 
-        // 1) Save event
+        // Save event
         const res = await apiFetch('/events', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -400,77 +496,93 @@
           return;
         }
 
-        // Immediately refresh analytics so graphs update even if AI dies
-        loadAnalytics();
-
         const notesTrim = (notes || "").trim();
         if (!notesTrim) {
           msgEl.textContent = "Event logged.";
           btn.disabled = false;
           btn.textContent = oldBtnText;
+          loadAnalytics();
           return;
         }
 
-        // 2) Fire AI analyze in a separate async block so failure doesn't look like total network death
         btn.textContent = "Analyzing…";
         startDots();
 
-        (async () => {
+        let ok = false;
+        let j = {};
+        let errMsg = "";
+
+        for (let attempt = 1; attempt <= 6; attempt++) {
+          const r = await apiFetch('/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
+          });
           try {
-            let j = {}, ok = false, err = "";
-            for (let attempt = 1; attempt <= 6; attempt++) {
-              const r = await apiFetch('/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ notes: notesTrim, event_id: saved.id })
-              });
-              try { j = await r.json(); } catch { j = {}; }
-              if (r.ok && (j.scores && j.scores.length)) { ok = true; break; }
-
-              const reason = (j.reason || "").toLowerCase();
-              if (reason.includes("503") || reason.includes("warm") ||
-                  reason.includes("network") || reason.includes("429") ||
-                  reason.includes("hf_unavailable")) {
-                await new Promise(s => setTimeout(s, 700 * attempt));
-                continue;
-              }
-              err = j.reason || `HTTP ${r.status}`;
-              break;
-            }
-
-            stopDots();
-            if (ok) {
-              const top3 = j.scores.slice(0, 3)
-                .map(s => `${s.label} ${(s.score*100).toFixed(1)}%`)
-                .join(" • ");
-              msgEl.textContent = `Event logged. AI emotions: ${top3}`;
-            } else {
-              msgEl.textContent = `Event logged. AI still warming up…`;
-              console.log("Analyze debug:", j || err);
-            }
-          } catch (e2) {
-            stopDots();
-            console.error("Analyze error:", e2);
-            msgEl.textContent = "Event logged. AI analysis unavailable right now.";
-          } finally {
-            btn.disabled = false;
-            btn.textContent = "Log Event";
+            j = await r.json();
+          } catch {
+            j = {};
           }
-        })();
+
+          if (r.ok && j.scores && j.scores.length) {
+            ok = true;
+            break;
+          }
+
+          const reason = (j.reason || "").toLowerCase();
+          errMsg = j.reason || `HTTP ${r.status}`;
+
+          if (
+            r.status === 429 ||
+            r.status === 500 ||
+            r.status === 502 ||
+            r.status === 503 ||
+            r.status === 504 ||
+            reason.includes("hf_status_") ||
+            reason.includes("hf_unavailable") ||
+            reason.includes("network_error")
+          ) {
+            await new Promise(s => setTimeout(s, 700 * attempt));
+            continue;
+          }
+
+          break;
+        }
+
+        stopDots();
+
+        if (ok) {
+          const top3 = j.scores
+            .slice(0, 3)
+            .map(s => `${s.label} ${(s.score * 100).toFixed(1)}%`)
+            .join(" • ");
+          msgEl.textContent = `Event logged. AI emotions: ${top3}`;
+        } else {
+          msgEl.textContent = `Event logged. AI unavailable: ${errMsg}`;
+          console.log("Analyze debug:", j);
+        }
+
+        btn.disabled = false;
+        btn.textContent = oldBtnText;
+        loadAnalytics();
 
       } catch (e2) {
         stopDots();
-        console.error("Event submit error:", e2);
-        msgEl.textContent = "Network error while saving event.";
-        btn.disabled = false;
-        btn.textContent = "Log Event";
+        msgEl.textContent = "Network error.";
+        console.error(e2);
+        const btn = this.querySelector('button[type="submit"]');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Log Event";
+        }
       }
     });
 
-    // Init
     reflectAuthUI();
     checkBackend();
-    if (localStorage.getItem('user_id')) loadAnalytics();
+    if (localStorage.getItem('user_id')) {
+      loadAnalytics();
+    }
   </script>
 </body>
 </html>
