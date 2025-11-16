@@ -26,7 +26,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HUGGINGFACE_MODEL = os.getenv(
     "HUGGINGFACE_MODEL",
-    "SamLowe/roberta-base-go_emotions"  # default
+    "j-hartmann/emotion-english-distilroberta-base"  # default
 )
 
 
@@ -382,7 +382,7 @@ def analyze():
     # Trim absurdly long input
     notes = notes[:500]
 
-    url = f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}"
+    url = f"https://router.huggingface.co/hf-inference/models/{HUGGINGFACE_MODEL}"
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"} if HUGGINGFACE_API_KEY else {}
     payload = {"inputs": notes}
 
